@@ -671,11 +671,11 @@ func hcnOpenService(service *hcnService, result **uint16) (hr error) {
 	return
 }
 
-func hcnRegisterServiceCallback(service hcnService, callback int32, context int32, callbackHandle *hcnCallbackHandle) (hr error) {
+func hcnRegisterServiceCallback(callback uintptr, context uintptr, callbackHandle *hcnCallbackHandle) (hr error) {
 	if hr = procHcnRegisterServiceCallback.Find(); hr != nil {
 		return
 	}
-	r0, _, _ := syscall.Syscall6(procHcnRegisterServiceCallback.Addr(), 4, uintptr(service), uintptr(callback), uintptr(context), uintptr(unsafe.Pointer(callbackHandle)), 0, 0)
+	r0, _, _ := syscall.Syscall(procHcnRegisterServiceCallback.Addr(), 3, uintptr(callback), uintptr(context), uintptr(unsafe.Pointer(callbackHandle)))
 	if int32(r0) < 0 {
 		if r0&0x1fff0000 == 0x00070000 {
 			r0 &= 0xffff

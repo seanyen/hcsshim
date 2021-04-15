@@ -57,7 +57,7 @@ import (
 
 // Service
 //sys hcnOpenService(service *hcnService, result **uint16) (hr error) = computenetwork.HcnOpenService?
-//sys hcnRegisterServiceCallback(service hcnService, callback int32, context int32, callbackHandle *hcnCallbackHandle) (hr error) = computenetwork.HcnRegisterServiceCallback?
+//sys hcnRegisterServiceCallback(callback uintptr, context uintptr, callbackHandle *hcnCallbackHandle) (hr error) = computenetwork.HcnRegisterServiceCallback?
 //sys hcnUnregisterServiceCallback(callbackHandle hcnCallbackHandle) (hr error) = computenetwork.HcnUnregisterServiceCallback?
 //sys hcnCloseService(service hcnService) (hr error) = computenetwork.HcnCloseService?
 

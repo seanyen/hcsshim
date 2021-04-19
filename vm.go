@@ -21,7 +21,7 @@ type VirtualMachineSpec struct {
 	system    *hcs.System
 }
 
-func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryInMB, processorCount int, vnicId, macAddress string) (*VirtualMachineSpec, error) {
+func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryInMB, processorCount int, vnicId, macAddress string, guestconnection bool) (*VirtualMachineSpec, error) {
 	spec := &hcsschema.ComputeSystem{
 		Owner: owner,
 		SchemaVersion: &hcsschema.Version{
@@ -64,10 +64,6 @@ func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryIn
 				},
 				NetworkAdapters: map[string]hcsschema.NetworkAdapter{},
 			},
-			// GuestConnection: &hcsschema.GuestConnection{
-			//	UseVsock:            true,
-			//	UseConnectedSuspend: true,
-			//},
 		},
 	}
 
@@ -75,6 +71,13 @@ func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryIn
 		spec.VirtualMachine.Devices.NetworkAdapters["ext"] = hcsschema.NetworkAdapter{
 			EndpointId: vnicId,
 			MacAddress: macAddress,
+		}
+	}
+
+	if guestconnection {
+		spec.VirtualMachine.GuestConnection = &hcsschema.GuestConnection{
+			UseVsock:            true,
+			UseConnectedSuspend: true,
 		}
 	}
 

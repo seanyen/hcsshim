@@ -82,6 +82,7 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 					},
 				},
 				NetworkAdapters: map[string]hcsschema.NetworkAdapter{},
+				Plan9:           &hcsschema.Plan9{},
 			},
 		},
 	}

@@ -27,6 +27,21 @@ const (
 	GpuAssignmentModeMirror   = GpuAssignmentMode("Mirror")
 )
 
+type ShutdownMechanism string
+
+const (
+	ShutdownMechanismGuestConnection    = ShutdownMechanism("GuestConnection")
+	ShutdownMechanismIntegrationService = ShutdownMechanism("IntegrationService")
+)
+
+type ShutdownType string
+
+const (
+	ShutdownTypeShutdown  = ShutdownType("Shutdown")
+	ShutdownTypeHibernate = ShutdownType("Hibernate")
+	ShutdownTypeReboot    = ShutdownType("Reboot")
+)
+
 type VirtualMachineOptions struct {
 	Name               string
 	Id                 string
@@ -86,13 +101,13 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 			},
 			Devices: &hcsschema.Devices{
 				Scsi: map[string]hcsschema.Scsi{
-					"primary": hcsschema.Scsi{
+					"primary": {
 						Attachments: map[string]hcsschema.Attachment{
-							"0": hcsschema.Attachment{
+							"0": {
 								Path:  opts.VhdPath,
 								Type_: "VirtualDisk",
 							},
-							"1": hcsschema.Attachment{
+							"1": {
 								Path:  opts.IsoPath,
 								Type_: "Iso",
 							},
@@ -255,7 +270,7 @@ func (vm *VirtualMachineSpec) Start() error {
 }
 
 // Stop a Virtual Machine
-func (vm *VirtualMachineSpec) Stop() error {
+func (vm *VirtualMachineSpec) Stop(force bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
@@ -264,7 +279,12 @@ func (vm *VirtualMachineSpec) Stop() error {
 	}
 	defer system.Close()
 
-	return system.Shutdown(ctx)
+	shutdownOptions, err := generateShutdownOptions(force)
+	if err != nil {
+		return err
+	}
+
+	return system.Shutdown(ctx, shutdownOptions)
 }
 
 // Delete a Virtual Machine
@@ -512,4 +532,21 @@ func (vm *VirtualMachineSpec) String() string {
 	}
 
 	return string(jsonString)
+}
+
+func generateShutdownOptions(force bool) (string, error) {
+	// TODO: shutdown options only supported at schema version 2.5 and above
+	//       check current schema version on the running system and return empty string if
+	//       running on schema version 2.4 and below
+	options := hcsschema.ShutdownOptions{
+		Mechanism: string(ShutdownMechanismGuestConnection),
+		Type:      string(ShutdownTypeShutdown),
+		Force:     force,
+		Reason:    "Requested shutdown",
+	}
+	optionsB, err := json.Marshal(options)
+	if err != nil {
+		return "", err
+	}
+	return string(optionsB), nil
 }

@@ -316,7 +316,7 @@ func (computeSystem *System) ID() string {
 }
 
 // Shutdown requests a compute system shutdown.
-func (computeSystem *System) Shutdown(ctx gcontext.Context) (err error) {
+func (computeSystem *System) Shutdown(ctx gcontext.Context, options string) (err error) {
 	computeSystem.handleLock.RLock()
 	defer computeSystem.handleLock.RUnlock()
 
@@ -331,7 +331,7 @@ func (computeSystem *System) Shutdown(ctx gcontext.Context) (err error) {
 	}
 
 	var resultp *uint16
-	err = hcsShutdownComputeSystemContext(ctx, computeSystem.handle, "", &resultp)
+	err = hcsShutdownComputeSystemContext(ctx, computeSystem.handle, options, &resultp)
 	events := processHcsResult(ctx, resultp)
 	switch err {
 	case nil, ErrVmcomputeAlreadyStopped, ErrComputeSystemDoesNotExist, ErrVmcomputeOperationPending:

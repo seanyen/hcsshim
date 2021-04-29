@@ -104,7 +104,7 @@ func (container *container) Start() error {
 
 // Shutdown requests a container shutdown, but it may not actually be shutdown until Wait() succeeds.
 func (container *container) Shutdown() error {
-	err := container.system.Shutdown(context.Background())
+	err := container.system.Shutdown(context.Background(), "")
 	if err != nil {
 		return convertSystemError(err, container)
 	}

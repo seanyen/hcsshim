@@ -136,7 +136,7 @@ func (c *Container) shutdown(ctx context.Context, proc rpcProc) error {
 // Shutdown sends a graceful shutdown request to the container. The container
 // might not be terminated by the time the request completes (and might never
 // terminate).
-func (c *Container) Shutdown(ctx context.Context) error {
+func (c *Container) Shutdown(ctx context.Context, options string) error {
 	return c.shutdown(ctx, rpcShutdownGraceful)
 }
 

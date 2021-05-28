@@ -8,6 +8,7 @@ import (
 	"path"
 	"time"
 
+	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/Microsoft/hcsshim/hcn"
 	"github.com/Microsoft/hcsshim/internal/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/hcs"
@@ -53,6 +54,7 @@ type VirtualMachineOptions struct {
 	VnicId             string
 	MacAddress         string
 	UseGuestConnection bool
+	AllowOvercommit    bool
 }
 
 const plan9Port = 564
@@ -93,7 +95,8 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 			},
 			ComputeTopology: &hcsschema.Topology{
 				Memory: &hcsschema.Memory2{
-					SizeInMB: int32(opts.MemoryInMB),
+					SizeInMB:        int32(opts.MemoryInMB),
+					AllowOvercommit: opts.AllowOvercommit,
 				},
 				Processor: &hcsschema.Processor2{
 					Count: int32(opts.ProcessorCount),
@@ -522,6 +525,70 @@ func (vm *VirtualMachineSpec) UpdateGpuConfiguration(mode GpuAssignmentMode, all
 		return err
 	}
 
+	return nil
+}
+
+// Add vPCI device
+func (vm *VirtualMachineSpec) AssignDevice(ctx context.Context, deviceID string) (string, error) {
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return "", err
+	}
+	defer system.Close()
+
+	guid, err := guid.NewV4()
+	if err != nil {
+		return "", err
+	}
+
+	vmBusGUID := guid.String()
+	targetDevice := hcsschema.VirtualPciDevice{
+		Functions: []hcsschema.VirtualPciFunction{
+			{
+				DeviceInstancePath: deviceID,
+			},
+		},
+	}
+	request := &hcsschema.ModifySettingRequest{
+		ResourcePath: fmt.Sprintf("VirtualMachine/Devices/VirtualPci/%s", vmBusGUID),
+		RequestType:  requesttype.Add,
+		Settings:     targetDevice,
+	}
+
+	// for LCOW, we need to make sure that specific paths relating to the
+	// device exist so they are ready to be used by later
+	// work in openGCS
+	request.GuestRequest = guestrequest.GuestRequest{
+		ResourceType: guestrequest.ResourceTypeVPCIDevice,
+		RequestType:  requesttype.Add,
+		Settings: guestrequest.LCOWMappedVPCIDevice{
+			VMBusGUID: vmBusGUID,
+		},
+	}
+
+	if err := system.Modify(ctx, request); err != nil {
+		return "", err
+	}
+
+	return vmBusGUID, nil
+}
+
+// Removes a vpci device from VirtualMachineSpec
+func (vm *VirtualMachineSpec) RemoveDevice(ctx context.Context, vmBusGUID string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return err
+	}
+
+	defer system.Close()
+
+	return system.Modify(ctx, &hcsschema.ModifySettingRequest{
+		ResourcePath: fmt.Sprintf("VirtualMachine/Devices/VirtualPci/%s", vmBusGUID),
+		RequestType:  requesttype.Remove,
+	})
 	return nil
 }
 

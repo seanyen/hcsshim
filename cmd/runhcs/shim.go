@@ -214,7 +214,7 @@ var shimCommand = cli.Command{
 			// Shutdown the container, waiting 5 minutes before terminating is
 			// forcefully.
 			const shutdownTimeout = time.Minute * 5
-			err := c.hc.Shutdown(gcontext.Background())
+			err := c.hc.Shutdown(gcontext.Background(), "")
 			if err != nil {
 				select {
 				case <-containerExitCh:

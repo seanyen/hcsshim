@@ -62,7 +62,7 @@ type EndpointNotFoundError struct {
 }
 
 func (e EndpointNotFoundError) Error() string {
-	if e.EndpointName == "" {
+	if e.EndpointName != "" {
 		return fmt.Sprintf("Endpoint Name %s not found", e.EndpointName)
 	}
 	return fmt.Sprintf("Endpoint Id %s not found", e.EndpointID)

@@ -14,7 +14,17 @@ import (
 	"github.com/Microsoft/hcsshim/internal/requesttype"
 	"github.com/Microsoft/hcsshim/internal/schema1"
 	hcsschema "github.com/Microsoft/hcsshim/internal/schema2"
+	"github.com/Microsoft/hcsshim/internal/wclayer"
 	"github.com/Microsoft/hcsshim/osversion"
+)
+
+type GpuAssignmentMode string
+
+const (
+	GpuAssignmentModeDisabled = GpuAssignmentMode("Disabled")
+	GpuAssignmentModeDefault  = GpuAssignmentMode("Default")
+	GpuAssignmentModeList     = GpuAssignmentMode("List")
+	GpuAssignmentModeMirror   = GpuAssignmentMode("Mirror")
 )
 
 type VirtualMachineOptions struct {
@@ -41,6 +51,14 @@ type VirtualMachineSpec struct {
 }
 
 func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec, error) {
+	// Ensure the VM has access, we use opts.Id to create VM
+	if err := wclayer.GrantVmAccess(opts.Id, opts.VhdPath); err != nil {
+		return nil, err
+	}
+	if err := wclayer.GrantVmAccess(opts.Id, opts.IsoPath); err != nil {
+		return nil, err
+	}
+
 	spec := &hcsschema.ComputeSystem{
 		Owner: opts.Owner,
 		SchemaVersion: &hcsschema.Version{
@@ -68,13 +86,13 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 			},
 			Devices: &hcsschema.Devices{
 				Scsi: map[string]hcsschema.Scsi{
-					"primary": hcsschema.Scsi{
+					"primary": {
 						Attachments: map[string]hcsschema.Attachment{
-							"0": hcsschema.Attachment{
+							"0": {
 								Path:  opts.VhdPath,
 								Type_: "VirtualDisk",
 							},
-							"1": hcsschema.Attachment{
+							"1": {
 								Path:  opts.IsoPath,
 								Type_: "Iso",
 							},
@@ -452,6 +470,38 @@ func (vm *VirtualMachineSpec) RemovePlan9(shareName string, uvmPath string) (err
 	if err := system.Modify(ctx, modification); err != nil {
 		return fmt.Errorf("failed to remove plan9 share %s from %s: %+v: %s", shareName, vm.ID, modification, err)
 	}
+	return nil
+}
+
+func (vm *VirtualMachineSpec) UpdateGpuConfiguration(mode GpuAssignmentMode, allowVendorExtension bool, assignments map[string]uint16) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return err
+	}
+	defer system.Close()
+
+	settings := hcsschema.GpuConfiguration{
+		AssignmentMode:       string(mode),
+		AllowVendorExtension: allowVendorExtension,
+	}
+
+	if len(assignments) != 0 {
+		settings.AssignmentRequest = assignments
+	}
+
+	request := hcsschema.ModifySettingRequest{
+		RequestType:  requesttype.Update,
+		ResourcePath: "VirtualMachine/ComputeTopology/Gpu",
+		Settings:     settings,
+	}
+
+	if err := system.Modify(ctx, request); err != nil {
+		return err
+	}
+
 	return nil
 }
 

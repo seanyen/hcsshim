@@ -3,15 +3,34 @@ package hcsshim
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"path"
 	"time"
 
 	"github.com/Microsoft/hcsshim/hcn"
+	"github.com/Microsoft/hcsshim/internal/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/hcs"
 	"github.com/Microsoft/hcsshim/internal/requesttype"
 	"github.com/Microsoft/hcsshim/internal/schema1"
 	hcsschema "github.com/Microsoft/hcsshim/internal/schema2"
+	"github.com/Microsoft/hcsshim/osversion"
 )
+
+type VirtualMachineOptions struct {
+	Name               string
+	Id                 string
+	VhdPath            string
+	IsoPath            string
+	Owner              string
+	MemoryInMB         int32
+	ProcessorCount     int32
+	VnicId             string
+	MacAddress         string
+	UseGuestConnection bool
+}
+
+const plan9Port = 564
 
 type VirtualMachineSpec struct {
 	Name      string
@@ -21,9 +40,9 @@ type VirtualMachineSpec struct {
 	system    *hcs.System
 }
 
-func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryInMB, processorCount int, vnicId, macAddress string) (*VirtualMachineSpec, error) {
+func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec, error) {
 	spec := &hcsschema.ComputeSystem{
-		Owner: owner,
+		Owner: opts.Owner,
 		SchemaVersion: &hcsschema.Version{
 			Major: 2,
 			Minor: 1,
@@ -41,10 +60,10 @@ func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryIn
 			},
 			ComputeTopology: &hcsschema.Topology{
 				Memory: &hcsschema.Memory2{
-					SizeInMB: int32(memoryInMB),
+					SizeInMB: int32(opts.MemoryInMB),
 				},
 				Processor: &hcsschema.Processor2{
-					Count: int32(processorCount),
+					Count: int32(opts.ProcessorCount),
 				},
 			},
 			Devices: &hcsschema.Devices{
@@ -52,36 +71,40 @@ func CreateVirtualMachineSpec(name, id, vhdPath, isoPath, owner string, memoryIn
 					"primary": hcsschema.Scsi{
 						Attachments: map[string]hcsschema.Attachment{
 							"0": hcsschema.Attachment{
-								Path:  vhdPath,
+								Path:  opts.VhdPath,
 								Type_: "VirtualDisk",
 							},
 							"1": hcsschema.Attachment{
-								Path:  isoPath,
+								Path:  opts.IsoPath,
 								Type_: "Iso",
 							},
 						},
 					},
 				},
 				NetworkAdapters: map[string]hcsschema.NetworkAdapter{},
+				Plan9:           &hcsschema.Plan9{},
 			},
-			// GuestConnection: &hcsschema.GuestConnection{
-			//	UseVsock:            true,
-			//	UseConnectedSuspend: true,
-			//},
 		},
 	}
 
-	if len(vnicId) > 0 {
+	if len(opts.VnicId) > 0 {
 		spec.VirtualMachine.Devices.NetworkAdapters["ext"] = hcsschema.NetworkAdapter{
-			EndpointId: vnicId,
-			MacAddress: macAddress,
+			EndpointId: opts.VnicId,
+			MacAddress: opts.MacAddress,
+		}
+	}
+
+	if opts.UseGuestConnection {
+		spec.VirtualMachine.GuestConnection = &hcsschema.GuestConnection{
+			UseVsock:            true,
+			UseConnectedSuspend: true,
 		}
 	}
 
 	return &VirtualMachineSpec{
 		spec: spec,
-		ID:   id,
-		Name: name,
+		ID:   opts.Id,
+		Name: opts.Name,
 	}, nil
 }
 
@@ -327,6 +350,108 @@ func (vm *VirtualMachineSpec) hotAttachEndpoint(ctx context.Context, system *hcs
 		return err
 	}
 
+	return nil
+}
+
+// AddPlan9 adds a Plan9 share to a VirtualMachineSpec.
+func (vm *VirtualMachineSpec) AddPlan9(shareName string, hostPath string, uvmPath string, readOnly bool, restrict bool, allowedNames []string) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return err
+	}
+	defer system.Close()
+
+	if restrict && osversion.Get().Build < 18328 {
+		return errors.New("single-file mappings are not supported on this build of Windows")
+	}
+	if uvmPath == "" {
+		return fmt.Errorf("uvmPath must be passed to AddPlan9")
+	}
+
+	// TODO: JTERRY75 - These are marked private in the schema. For now use them
+	// but when there are public variants we need to switch to them.
+	const (
+		shareFlagsReadOnly           int32 = 0x00000001
+		shareFlagsLinuxMetadata      int32 = 0x00000004
+		shareFlagsCaseSensitive      int32 = 0x00000008
+		shareFlagsRestrictFileAccess int32 = 0x00000080
+	)
+
+	// TODO: JTERRY75 - `shareFlagsCaseSensitive` only works if the Windows
+	// `hostPath` supports case sensitivity. We need to detect this case before
+	// forwarding this flag in all cases.
+	flags := shareFlagsLinuxMetadata // | shareFlagsCaseSensitive
+	if readOnly {
+		flags |= shareFlagsReadOnly
+	}
+	if restrict {
+		flags |= shareFlagsRestrictFileAccess
+	}
+
+	modification := &hcsschema.ModifySettingRequest{
+		RequestType: requesttype.Add,
+		Settings: hcsschema.Plan9Share{
+			Name:         shareName,
+			AccessName:   shareName,
+			Path:         hostPath,
+			Port:         plan9Port,
+			Flags:        flags,
+			AllowedFiles: allowedNames,
+		},
+		ResourcePath: fmt.Sprintf("VirtualMachine/Devices/Plan9/Shares"),
+		GuestRequest: guestrequest.GuestRequest{
+			ResourceType: guestrequest.ResourceTypeMappedDirectory,
+			RequestType:  requesttype.Add,
+			Settings: guestrequest.LCOWMappedDirectory{
+				MountPath: uvmPath,
+				ShareName: shareName,
+				Port:      plan9Port,
+				ReadOnly:  readOnly,
+			},
+		},
+	}
+
+	if err := system.Modify(ctx, modification); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (vm *VirtualMachineSpec) RemovePlan9(shareName string, uvmPath string) (err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return err
+	}
+	defer system.Close()
+
+	modification := &hcsschema.ModifySettingRequest{
+		RequestType: requesttype.Remove,
+		Settings: hcsschema.Plan9Share{
+			Name:       shareName,
+			AccessName: shareName,
+			Port:       plan9Port,
+		},
+		ResourcePath: fmt.Sprintf("VirtualMachine/Devices/Plan9/Shares"),
+		GuestRequest: guestrequest.GuestRequest{
+			ResourceType: guestrequest.ResourceTypeMappedDirectory,
+			RequestType:  requesttype.Remove,
+			Settings: guestrequest.LCOWMappedDirectory{
+				MountPath: uvmPath,
+				ShareName: shareName,
+				Port:      plan9Port,
+			},
+		},
+	}
+	if err := system.Modify(ctx, modification); err != nil {
+		return fmt.Errorf("failed to remove plan9 share %s from %s: %+v: %s", shareName, vm.ID, modification, err)
+	}
 	return nil
 }
 

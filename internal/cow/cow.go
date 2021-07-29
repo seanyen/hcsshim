@@ -69,7 +69,7 @@ type Container interface {
 	Start(ctx context.Context) error
 	// Shutdown sends a shutdown request to the container (but does not wait for
 	// the shutdown to complete).
-	Shutdown(ctx context.Context) error
+	Shutdown(ctx context.Context, options string) error
 	// Terminate sends a terminate request to the container (but does not wait
 	// for the terminate to complete).
 	Terminate(ctx context.Context) error

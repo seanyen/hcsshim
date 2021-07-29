@@ -520,7 +520,7 @@ func (ht *hcsTask) close(ctx context.Context) {
 				werr = ht.c.Wait()
 				close(ch)
 			}()
-			err := ht.c.Shutdown(ctx)
+			err := ht.c.Shutdown(ctx, "")
 			if err != nil {
 				log.G(ctx).WithError(err).Error("failed to shutdown container")
 			} else {

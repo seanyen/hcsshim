@@ -49,7 +49,7 @@ type NetworkNotFoundError struct {
 }
 
 func (e NetworkNotFoundError) Error() string {
-	if e.NetworkName == "" {
+	if e.NetworkName != "" {
 		return fmt.Sprintf("Network Name %s not found", e.NetworkName)
 	}
 	return fmt.Sprintf("Network Id %s not found", e.NetworkID)

@@ -262,7 +262,12 @@ func (b *Bridge) signalContainerV2(ctx context.Context, span *trace.Span, r *Req
 		}
 		// This is a destructive call. We do not respond to the HCS
 		b.quitChan <- true
-		b.hostState.Shutdown()
+		// On RS5, HCS bridge server expect to receive response from the request,
+		// invoke Shutdown in go routine so we can return response back to bridge server
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			b.hostState.Shutdown()
+		}()
 	} else {
 		c, err := b.hostState.GetContainer(request.ContainerID)
 		if err != nil {

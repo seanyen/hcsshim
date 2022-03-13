@@ -123,6 +123,13 @@ type HcnServiceWatcher struct {
 	started        bool
 }
 
+type HcnNetworkWatcher struct {
+	handleLock     sync.RWMutex
+	callbackNumber uintptr
+	watcherContext *notifcationWatcherContext
+	started        bool
+}
+
 func NewHcnServiceWatcher() *HcnServiceWatcher {
 	watcherContext := &notifcationWatcherContext{
 		channel: make(notificationChannel, 1),
@@ -199,6 +206,108 @@ func (w *HcnServiceWatcher) Notification() <-chan HcnNotificationData {
 }
 
 func (w *HcnServiceWatcher) Close() error {
+	w.Stop()
+
+	w.handleLock.RLock()
+	close(w.watcherContext.channel)
+	callbackNumber := w.callbackNumber
+	w.handleLock.RUnlock()
+
+	callbackMapLock.Lock()
+	delete(callbackMap, callbackNumber)
+	callbackMapLock.Unlock()
+
+	return nil
+}
+
+func NewHcnNetworkWatcher() *HcnNetworkWatcher {
+	watcherContext := &notifcationWatcherContext{
+		channel: make(notificationChannel, 1),
+	}
+
+	callbackMapLock.Lock()
+	callbackNumber := nextCallback
+	nextCallback++
+	callbackMap[callbackNumber] = watcherContext
+	callbackMapLock.Unlock()
+
+	return &HcnNetworkWatcher{
+		callbackNumber: callbackNumber,
+		watcherContext: watcherContext,
+	}
+}
+
+func (w *HcnNetworkWatcher) Start(networkId string) error {
+	w.handleLock.RLock()
+	defer w.handleLock.RUnlock()
+
+	if w.started {
+		return nil
+	}
+
+	var networkHandle hcnNetwork
+	var resultBuffer *uint16
+	networkGuid, err := guid.FromString(networkId)
+	if err != nil {
+		return errInvalidNetworkID
+	}
+
+	hr := hcnOpenNetwork(&networkGuid, &networkHandle, &resultBuffer)
+	if err = checkForErrors("hcnOpenNetwork", hr, resultBuffer); err != nil {
+		return err
+	}
+
+	var callbackHandle hcnCallbackHandle
+	err = hcnRegisterNetworkCallback(networkHandle, notificationWatcherCallback, w.callbackNumber, &callbackHandle)
+	if err != nil {
+		return err
+	}
+
+	w.watcherContext.handle = callbackHandle
+	w.started = true
+	return nil
+}
+
+func (w *HcnNetworkWatcher) Stop() error {
+	var handle hcnCallbackHandle
+
+	{
+		w.handleLock.RLock()
+		defer w.handleLock.RUnlock()
+
+		if !w.started {
+			return nil
+		}
+		w.started = false
+		handle = w.watcherContext.handle
+		w.watcherContext.handle = 0
+	}
+
+	if handle == 0 {
+		return nil
+	}
+
+	// hcnUnregisterNetworkCallback has its own syncronization
+	// to wait for all callbacks to complete. We must NOT hold the callbackMapLock.
+	err := hcnUnregisterNetworkCallback(handle)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (w *HcnNetworkWatcher) Notification() <-chan HcnNotificationData {
+	w.handleLock.RLock()
+	defer w.handleLock.RUnlock()
+
+	if !w.started {
+		return nil
+	}
+	return w.watcherContext.channel
+}
+
+func (w *HcnNetworkWatcher) Close() error {
 	w.Stop()
 
 	w.handleLock.RLock()

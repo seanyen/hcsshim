@@ -14,6 +14,9 @@ type Uefi struct {
 
 	SecureBootTemplateId string `json:"SecureBootTemplateId,omitempty"`
 
+	// schema version 2.3
+	ApplySecureBootTemplate string `json:"ApplySecureBootTemplate,omitempty"`
+
 	BootThis *UefiBootEntry `json:"BootThis,omitempty"`
 
 	Console string `json:"Console,omitempty"`

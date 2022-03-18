@@ -44,17 +44,20 @@ const (
 )
 
 type VirtualMachineOptions struct {
-	Name               string
-	Id                 string
-	VhdPath            string
-	IsoPath            string
-	Owner              string
-	MemoryInMB         int32
-	ProcessorCount     int32
-	VnicId             string
-	MacAddress         string
-	UseGuestConnection bool
-	AllowOvercommit    bool
+	Name                    string
+	Id                      string
+	VhdPath                 string
+	IsoPath                 string
+	Owner                   string
+	MemoryInMB              int32
+	ProcessorCount          int32
+	VnicId                  string
+	MacAddress              string
+	UseGuestConnection      bool
+	GuestConnectionUseVsock bool
+	AllowOvercommit         bool
+	SecureBootEnabled       bool
+	SecureBootTemplateId    string
 }
 
 const plan9Port = 564
@@ -76,12 +79,12 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 		return nil, err
 	}
 
+	// determine which schema version to use
+	schemaVersion := getSchemaVersion(opts.SecureBootEnabled)
+
 	spec := &hcsschema.ComputeSystem{
-		Owner: opts.Owner,
-		SchemaVersion: &hcsschema.Version{
-			Major: 2,
-			Minor: 1,
-		},
+		Owner:                             opts.Owner,
+		SchemaVersion:                     &schemaVersion,
 		ShouldTerminateOnLastHandleClosed: true,
 		VirtualMachine: &hcsschema.VirtualMachine{
 			Chipset: &hcsschema.Chipset{
@@ -132,9 +135,14 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 
 	if opts.UseGuestConnection {
 		spec.VirtualMachine.GuestConnection = &hcsschema.GuestConnection{
-			UseVsock:            true,
+			UseVsock:            opts.GuestConnectionUseVsock,
 			UseConnectedSuspend: true,
 		}
+	}
+
+	if opts.SecureBootEnabled {
+		spec.VirtualMachine.Chipset.Uefi.SecureBootTemplateId = opts.SecureBootTemplateId
+		spec.VirtualMachine.Chipset.Uefi.ApplySecureBootTemplate = "Apply"
 	}
 
 	return &VirtualMachineSpec{
@@ -616,4 +624,18 @@ func generateShutdownOptions(force bool) (string, error) {
 		return "", err
 	}
 	return string(optionsB), nil
+}
+
+func getSchemaVersion(secureBootEnabled bool) hcsschema.Version {
+	if secureBootEnabled {
+		return hcsschema.Version{
+			Major: 2,
+			Minor: 3,
+		}
+	}
+
+	return hcsschema.Version{
+		Major: 2,
+		Minor: 1,
+	}
 }

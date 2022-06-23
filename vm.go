@@ -58,6 +58,8 @@ type VirtualMachineOptions struct {
 	AllowOvercommit         bool
 	SecureBootEnabled       bool
 	SecureBootTemplateId    string
+	HighMmioBaseInMB        int32
+	HighMmioGapInMB         int32
 }
 
 const plan9Port = 564
@@ -80,7 +82,7 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 	}
 
 	// determine which schema version to use
-	schemaVersion := getSchemaVersion(opts.SecureBootEnabled)
+	schemaVersion := getSchemaVersion(opts)
 
 	spec := &hcsschema.ComputeSystem{
 		Owner:                             opts.Owner,
@@ -143,6 +145,14 @@ func CreateVirtualMachineSpec(opts *VirtualMachineOptions) (*VirtualMachineSpec,
 	if opts.SecureBootEnabled {
 		spec.VirtualMachine.Chipset.Uefi.SecureBootTemplateId = opts.SecureBootTemplateId
 		spec.VirtualMachine.Chipset.Uefi.ApplySecureBootTemplate = "Apply"
+	}
+
+	if opts.HighMmioBaseInMB != 0 {
+		spec.VirtualMachine.ComputeTopology.Memory.HighMmioBaseInMB = opts.HighMmioBaseInMB
+	}
+
+	if opts.HighMmioGapInMB != 0 {
+		spec.VirtualMachine.ComputeTopology.Memory.HighMmioGapInMB = opts.HighMmioGapInMB
 	}
 
 	return &VirtualMachineSpec{
@@ -626,8 +636,8 @@ func generateShutdownOptions(force bool) (string, error) {
 	return string(optionsB), nil
 }
 
-func getSchemaVersion(secureBootEnabled bool) hcsschema.Version {
-	if secureBootEnabled {
+func getSchemaVersion(opts *VirtualMachineOptions) hcsschema.Version {
+	if opts.SecureBootEnabled || opts.HighMmioBaseInMB != 0 || opts.HighMmioGapInMB != 0 {
 		return hcsschema.Version{
 			Major: 2,
 			Minor: 3,

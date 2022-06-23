@@ -20,6 +20,10 @@ type Memory2 struct {
 
 	EnableEpf bool `json:"EnableEpf,omitempty"`
 
+	HighMmioBaseInMB int32 `json:"HighMmioBaseInMB,omitempty"`
+
+	HighMmioGapInMB int32 `json:"HighMmioGapInMB,omitempty"`
+
 	// EnableDeferredCommit is private in the schema. If regenerated need to add back.
 	EnableDeferredCommit bool `json:"EnableDeferredCommit,omitempty"`
 }

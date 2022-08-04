@@ -1,11 +1,13 @@
 package hcsshim
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
@@ -349,6 +351,51 @@ func (vm *VirtualMachineSpec) ExecuteCommand(command string) error {
 	defer system.Close()
 
 	return nil
+}
+
+// RunCommand executes a command on the Virtual Machine
+func (vm *VirtualMachineSpec) RunCommand(command string) (output string, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
+	if err != nil {
+		return "", err
+	}
+	defer system.Close()
+
+	commandArray := strings.Split(command, " ")
+	params := &hcsschema.ProcessParameters{
+		CommandArgs:      commandArray,
+		WorkingDirectory: "/",
+		Environment:      map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+		CreateStdInPipe:  false,
+		CreateStdOutPipe: true,
+		CreateStdErrPipe: false,
+		ConsoleSize:      []int32{0, 0},
+	}
+
+	process, err := system.CreateProcess(ctx, params)
+	if err != nil {
+		return
+	}
+
+	defer process.Close()
+
+	err = process.Wait()
+	if err != nil {
+		return "Wait returned error!", err
+	}
+
+	_, reader, _ := process.Stdio()
+	if reader == nil {
+		return "Stdout is nil!", err
+	}
+
+	outBuf := new(bytes.Buffer)
+	outBuf.ReadFrom(reader)
+	output = strings.TrimSpace(outBuf.String())
+
+	return
 }
 
 func (vm *VirtualMachineSpec) HotAttachEndpoints(endpoints []*hcn.HostComputeEndpoint) (err error) {

@@ -354,7 +354,7 @@ func (vm *VirtualMachineSpec) ExecuteCommand(command string) error {
 }
 
 // RunCommand executes a command on the Virtual Machine
-func (vm *VirtualMachineSpec) RunCommand(command string) (output string, err error) {
+func (vm *VirtualMachineSpec) RunCommand(command []string) (output string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
@@ -363,9 +363,12 @@ func (vm *VirtualMachineSpec) RunCommand(command string) (output string, err err
 	}
 	defer system.Close()
 
-	commandArray := strings.Split(command, " ")
+	if system.OS() != "linux" {
+		return "", ErrNotSupported
+	}
+
 	params := &hcsschema.ProcessParameters{
-		CommandArgs:      commandArray,
+		CommandArgs:      command,
 		WorkingDirectory: "/",
 		Environment:      map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		CreateStdInPipe:  false,

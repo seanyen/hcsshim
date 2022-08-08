@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -29,6 +31,8 @@ import (
 	"github.com/Microsoft/hcsshim/internal/hcsoci"
 	"github.com/Microsoft/hcsshim/internal/jobcontainers"
 	"github.com/Microsoft/hcsshim/internal/log"
+	"github.com/Microsoft/hcsshim/internal/memory"
+	"github.com/Microsoft/hcsshim/internal/oc"
 	"github.com/Microsoft/hcsshim/internal/oci"
 	"github.com/Microsoft/hcsshim/internal/processorinfo"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
@@ -39,8 +43,6 @@ import (
 	"github.com/Microsoft/hcsshim/osversion"
 	"github.com/Microsoft/hcsshim/pkg/annotations"
 )
-
-const bytesPerMB = 1024 * 1024
 
 func newHcsStandaloneTask(ctx context.Context, events publisher, req *task.CreateTaskRequest, s *specs.Spec) (shimTask, error) {
 	log.G(ctx).WithField("tid", req.ID).Debug("newHcsStandaloneTask")
@@ -623,6 +625,13 @@ func (ht *hcsTask) DeleteExec(ctx context.Context, eid string) (int, uint32, tim
 			// https://pkg.go.dev/sync#Map.Range
 			return true
 		})
+
+		// cleanup the container directories inside the UVM if required.
+		if ht.host != nil {
+			if err := ht.host.DeleteContainerState(ctx, ht.id); err != nil {
+				log.G(ctx).WithError(err).Errorf("failed to delete container state")
+			}
+		}
 	}
 
 	status := e.Status()
@@ -691,7 +700,7 @@ func (ht *hcsTask) Wait() *task.StateResponse {
 }
 
 func (ht *hcsTask) waitInitExit(destroyContainer bool) {
-	ctx, span := trace.StartSpan(context.Background(), "hcsTask::waitInitExit")
+	ctx, span := oc.StartSpan(context.Background(), "hcsTask::waitInitExit")
 	defer span.End()
 	span.AddAttributes(trace.StringAttribute("tid", ht.id))
 
@@ -722,7 +731,7 @@ func (ht *hcsTask) waitInitExit(destroyContainer bool) {
 // Note: For Windows process isolated containers there is no host virtual
 // machine so this should not be called.
 func (ht *hcsTask) waitForHostExit() {
-	ctx, span := trace.StartSpan(context.Background(), "hcsTask::waitForHostExit")
+	ctx, span := oc.StartSpan(context.Background(), "hcsTask::waitForHostExit")
 	defer span.End()
 	span.AddAttributes(trace.StringAttribute("tid", ht.id))
 
@@ -1006,7 +1015,7 @@ func (ht *hcsTask) updateWCOWResources(ctx context.Context, data interface{}, an
 		return errors.New("must have resources be type *WindowsResources when updating a wcow container")
 	}
 	if resources.Memory != nil && resources.Memory.Limit != nil {
-		newMemorySizeInMB := *resources.Memory.Limit / bytesPerMB
+		newMemorySizeInMB := *resources.Memory.Limit / memory.MiB
 		memoryLimit := hcsoci.NormalizeMemorySize(ctx, ht.id, newMemorySizeInMB)
 		if err := ht.requestUpdateContainer(ctx, resourcepaths.SiloMemoryResourcePath, memoryLimit); err != nil {
 			return err

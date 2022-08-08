@@ -1,13 +1,17 @@
+//go:build windows
+
 package jobobject
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
 	"golang.org/x/sys/windows"
 )
 
@@ -23,7 +27,6 @@ func TestJobCreateAndOpen(t *testing.T) {
 		ctx     = context.Background()
 		options = &Options{Name: "test"}
 	)
-
 	jobCreate, err := Create(ctx, options)
 	if err != nil {
 		t.Fatal(err)
@@ -35,6 +38,109 @@ func TestJobCreateAndOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer jobOpen.Close()
+}
+
+func TestSiloCreateAndOpen(t *testing.T) {
+	var (
+		ctx     = context.Background()
+		options = &Options{
+			Name: "test",
+			Silo: true,
+		}
+	)
+	jobCreate, err := Create(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jobCreate.Close()
+
+	jobOpen, err := Open(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jobOpen.Close()
+
+	if !jobOpen.isSilo() {
+		t.Fatal("job is supposed to be a silo")
+	}
+}
+
+func TestJobStats(t *testing.T) {
+	var (
+		ctx     = context.Background()
+		options = &Options{
+			Name:             "test",
+			EnableIOTracking: true,
+		}
+	)
+	job, err := Create(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.Close()
+
+	_, err = createProcsAndAssign(1, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = job.QueryMemoryStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = job.QueryProcessorStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = job.QueryStorageStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := job.Terminate(1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIOTracking(t *testing.T) {
+	var (
+		ctx     = context.Background()
+		options = &Options{
+			Name: "test",
+		}
+	)
+	job, err := Create(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.Close()
+
+	_, err = createProcsAndAssign(1, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = job.QueryStorageStats()
+	// Element not found is returned if IO tracking isn't enabled.
+	if err != nil && !errors.Is(err, windows.ERROR_NOT_FOUND) {
+		t.Fatal(err)
+	}
+
+	// Turn it on and now the call should function.
+	if err := job.SetIOTracking(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = job.QueryStorageStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := job.Terminate(1); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func createProcsAndAssign(num int, job *JobObject) (_ []*exec.Cmd, err error) {
@@ -67,11 +173,7 @@ func createProcsAndAssign(num int, job *JobObject) (_ []*exec.Cmd, err error) {
 }
 
 func TestSetTerminateOnLastHandleClose(t *testing.T) {
-	options := &Options{
-		Name:          "test",
-		Notifications: true,
-	}
-	job, err := Create(context.Background(), options)
+	job, err := Create(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +201,7 @@ func TestSetTerminateOnLastHandleClose(t *testing.T) {
 		if !procs[0].ProcessState.Exited() {
 			errCh <- errors.New("process should have exited after closing job handle")
 		}
-		errCh <- nil
+		close(errCh)
 	}()
 
 	select {
@@ -116,11 +218,7 @@ func TestSetTerminateOnLastHandleClose(t *testing.T) {
 func TestSetMultipleExtendedLimits(t *testing.T) {
 	// Tests setting two different properties on the job that modify
 	// JOBOBJECT_EXTENDED_LIMIT_INFORMATION
-	options := &Options{
-		Name:          "test",
-		Notifications: true,
-	}
-	job, err := Create(context.Background(), options)
+	job, err := Create(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +256,6 @@ func TestNoMoreProcessesMessageKill(t *testing.T) {
 	// Test that we receive the no more processes in job message after killing all of
 	// the processes in the job.
 	options := &Options{
-		Name:          "test",
 		Notifications: true,
 	}
 	job, err := Create(context.Background(), options)
@@ -192,7 +289,8 @@ func TestNoMoreProcessesMessageKill(t *testing.T) {
 
 			switch notif.(type) {
 			case MsgAllProcessesExited:
-				errCh <- nil
+				close(errCh)
+				return
 			case MsgUnimplemented:
 			default:
 			}
@@ -213,7 +311,6 @@ func TestNoMoreProcessesMessageTerminate(t *testing.T) {
 	// Test that we receive the no more processes in job message after terminating the
 	// job (terminates every process in the job).
 	options := &Options{
-		Name:          "test",
 		Notifications: true,
 	}
 	job, err := Create(context.Background(), options)
@@ -245,7 +342,8 @@ func TestNoMoreProcessesMessageTerminate(t *testing.T) {
 
 			switch notif.(type) {
 			case MsgAllProcessesExited:
-				errCh <- nil
+				close(errCh)
+				return
 			case MsgUnimplemented:
 			default:
 			}
@@ -263,12 +361,9 @@ func TestNoMoreProcessesMessageTerminate(t *testing.T) {
 }
 
 func TestVerifyPidCount(t *testing.T) {
-	// This test verifies that job.Pids() returns the right info and works with > 1 process.
-	options := &Options{
-		Name:          "test",
-		Notifications: true,
-	}
-	job, err := Create(context.Background(), options)
+	// This test verifies that job.Pids() returns the right info and works with > 1
+	// process.
+	job, err := Create(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,6 +385,73 @@ func TestVerifyPidCount(t *testing.T) {
 	}
 
 	if err := job.Terminate(1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSilo(t *testing.T) {
+	// Test asking for a silo in the options.
+	options := &Options{
+		Silo: true,
+	}
+	job, err := Create(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.Close()
+}
+
+func TestSiloFileBinding(t *testing.T) {
+	// Can't use osversion as the binary needs to be manifested for it to work.
+	// Just stat for the bindflt dll.
+	if _, err := os.Stat(`C:\windows\system32\bindfltapi.dll`); err != nil {
+		t.Skip("Bindflt not present on RS5 or lower, skipping.")
+	}
+	// Test upgrading to a silo and binding a file only the silo can see.
+	options := &Options{
+		Silo: true,
+	}
+	job, err := Create(context.Background(), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer job.Close()
+
+	target := t.TempDir()
+	hostPath := filepath.Join(target, "bind-test.txt")
+	f, err := os.Create(hostPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	root := t.TempDir()
+	siloPath := filepath.Join(root, "silo-path.txt")
+	if err := job.ApplyFileBinding(siloPath, hostPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// First check that we can't see the file on the host.
+	if _, err := os.Stat(siloPath); err == nil {
+		t.Fatalf("expected to not be able to see %q on the host", siloPath)
+	}
+
+	// Now check that we can see it in the silo. Couple second timeout (ping something) so
+	// we can be relatively sure the process has been assigned to the job before we go to check
+	// on the file. Unfortunately we can't use our internal/exec package that has support for
+	// assigning a process to a job at creation time as it causes a cyclical import.
+	cmd := exec.Command("cmd", "/c", "ping", "localhost", "&&", "dir", siloPath)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := job.Assign(uint32(cmd.Process.Pid)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Process will have an exit code of 1 if dir couldn't find the file; if we get
+	// no error here we should be A-OK.
+	if err := cmd.Wait(); err != nil {
 		t.Fatal(err)
 	}
 }

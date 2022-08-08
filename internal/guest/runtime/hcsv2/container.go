@@ -5,7 +5,10 @@ package hcsv2
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/containerd/cgroups"
@@ -18,13 +21,27 @@ import (
 	"github.com/Microsoft/hcsshim/internal/guest/gcserr"
 	"github.com/Microsoft/hcsshim/internal/guest/prot"
 	"github.com/Microsoft/hcsshim/internal/guest/runtime"
+	specInternal "github.com/Microsoft/hcsshim/internal/guest/spec"
 	"github.com/Microsoft/hcsshim/internal/guest/stdio"
 	"github.com/Microsoft/hcsshim/internal/guest/storage"
 	"github.com/Microsoft/hcsshim/internal/guest/transport"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/logfields"
+	"github.com/Microsoft/hcsshim/internal/oc"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
+)
+
+// containerStatus has been introduced to enable parallel container creation
+type containerStatus uint32
+
+const (
+	// containerCreating is the default status set on a Container object, when
+	// no underlying runtime container or init process has been assigned
+	containerCreating containerStatus = iota
+	// containerCreated is the status when a runtime container and init process
+	// have been assigned, but runtime start command has not been issued yet
+	containerCreated
 )
 
 type Container struct {
@@ -42,6 +59,14 @@ type Container struct {
 
 	processesMutex sync.Mutex
 	processes      map[uint32]*containerProcess
+
+	// Only access atomically through getStatus/setStatus.
+	status containerStatus
+
+	// scratchDirPath represents the path inside the UVM where the scratch directory
+	// of this container is located. Usually, this is either `/run/gcs/c/<containerID>` or
+	// `/run/gcs/c/<UVMID>/container_<containerID>` if scratch is shared with UVM scratch.
+	scratchDirPath string
 }
 
 func (c *Container) Start(ctx context.Context, conSettings stdio.ConnectionSettings) (int, error) {
@@ -106,6 +131,11 @@ func (c *Container) ExecProcess(ctx context.Context, process *oci.Process, conSe
 	return pid, nil
 }
 
+// InitProcess returns the container's init process
+func (c *Container) InitProcess() Process {
+	return c.initProcess
+}
+
 // GetProcess returns the Process with the matching 'pid'. If the 'pid' does
 // not exit returns error.
 func (c *Container) GetProcess(pid uint32) (Process, error) {
@@ -113,7 +143,7 @@ func (c *Container) GetProcess(pid uint32) (Process, error) {
 	logrus.WithFields(logrus.Fields{
 		logfields.ContainerID: c.id,
 		logfields.ProcessID:   pid,
-	}).Info("opengcs::Container::GetProcesss")
+	}).Info("opengcs::Container::GetProcess")
 	if c.initProcess.pid == pid {
 		return c.initProcess, nil
 	}
@@ -158,17 +188,30 @@ func (c *Container) Delete(ctx context.Context) error {
 	entity.Info("opengcs::Container::Delete")
 	if c.isSandbox {
 		// remove user mounts in sandbox container
-		if err := storage.UnmountAllInPath(ctx, getSandboxMountsDir(c.id), true); err != nil {
+		if err := storage.UnmountAllInPath(ctx, specInternal.SandboxMountsDir(c.id), true); err != nil {
 			entity.WithError(err).Error("failed to unmount sandbox mounts")
 		}
 
 		// remove hugepages mounts in sandbox container
-		if err := storage.UnmountAllInPath(ctx, getSandboxHugePageMountsDir(c.id), true); err != nil {
+		if err := storage.UnmountAllInPath(ctx, specInternal.HugePagesMountsDir(c.id), true); err != nil {
 			entity.WithError(err).Error("failed to unmount hugepages mounts")
 		}
 	}
 
-	return c.container.Delete()
+	var retErr error
+	if err := c.container.Delete(); err != nil {
+		retErr = err
+	}
+
+	if err := os.RemoveAll(c.scratchDirPath); err != nil {
+		if retErr != nil {
+			retErr = fmt.Errorf("errors deleting container state, %s & %s", retErr, err)
+		} else {
+			retErr = err
+		}
+	}
+
+	return retErr
 }
 
 func (c *Container) Update(ctx context.Context, resources interface{}) error {
@@ -178,7 +221,7 @@ func (c *Container) Update(ctx context.Context, resources interface{}) error {
 
 // Wait waits for the container's init process to exit.
 func (c *Container) Wait() prot.NotificationType {
-	_, span := trace.StartSpan(context.Background(), "opengcs::Container::Wait")
+	_, span := oc.StartSpan(context.Background(), "opengcs::Container::Wait")
 	defer span.End()
 	span.AddAttributes(trace.StringAttribute(logfields.ContainerID, c.id))
 
@@ -203,7 +246,7 @@ func (c *Container) setExitType(signal syscall.Signal) {
 
 // GetStats returns the cgroup metrics for the container.
 func (c *Container) GetStats(ctx context.Context) (*v1.Metrics, error) {
-	_, span := trace.StartSpan(ctx, "opengcs::Container::GetStats")
+	_, span := oc.StartSpan(ctx, "opengcs::Container::GetStats")
 	defer span.End()
 	span.AddAttributes(trace.StringAttribute("cid", c.id))
 
@@ -218,4 +261,17 @@ func (c *Container) GetStats(ctx context.Context) (*v1.Metrics, error) {
 
 func (c *Container) modifyContainerConstraints(ctx context.Context, rt guestrequest.RequestType, cc *guestresource.LCOWContainerConstraints) (err error) {
 	return c.Update(ctx, cc.Linux)
+}
+
+func (c *Container) getStatus() containerStatus {
+	val := atomic.LoadUint32((*uint32)(&c.status))
+	return containerStatus(val)
+}
+
+func (c *Container) setStatus(st containerStatus) {
+	atomic.StoreUint32((*uint32)(&c.status), uint32(st))
+}
+
+func (c *Container) ID() string {
+	return c.id
 }

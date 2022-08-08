@@ -21,11 +21,22 @@ be downloaded, turned into an ext4, and finally a dm-verity root hash calculated
 image_name = "rust:1.52.1"
 command = ["rustc", "--help"]
 working_dir = "/home/user"
-expected_mounts = ["/path/to/container/mount-1", "/path/to/container/mount-2"]
+allow_elevated = true
+wait_mount_points = ["/path/to/container/mount-1", "/path/to/container/mount-2"]
 
 [[container.env_rule]]
 strategy = "re2"
 rule = "PREFIX_.+=.+"
+
+[[container.mount]]
+host_path = "sandbox://host/path/one"
+container_path = "/container/path/one"
+readonly = false
+
+[[container.mount]]
+host_path = "sandbox://host/path/two"
+container_path = "/container/path/two"
+readonly = true
 ```
 
 ### Converted to JSON
@@ -88,13 +99,45 @@ represented in JSON.
           }
         },
         "working_dir": "/home/user",
-        "expected_mounts": {
+        "wait_mount_points": {
           "length": 2,
           "elements": {
             "0": "/path/to/container/mount-1",
             "1": "/path/to/container/mount-2"
           }
-        }
+        },
+        "mounts": {
+          "length": 2,
+          "elements": {
+            "0": {
+              "source": "sandbox://host/path/one",
+              "destination": "/container/path/one",
+              "type": "bind",
+              "options": {
+                "length": 3,
+                "elements": {
+                  "0": "rbind",
+                  "1": "rshared",
+                  "2": "rw"
+                }
+              }
+            },
+            "1": {
+              "source": "sandbox://host/path/two",
+              "destination": "/container/path/two",
+              "type": "bind",
+              "options": {
+                "length": 3,
+                "elements": {
+                  "0": "rbind",
+                  "1": "rshared",
+                  "2": "ro"
+                }
+              }
+            }
+          }
+        },
+        "allow_elevated": true
       },
       "1": {
         "command": {
@@ -123,10 +166,15 @@ represented in JSON.
           }
         },
         "working_dir": "/",
-        "expected_mounts": {
+        "wait_mount_points": {
           "length": 0,
           "elements": {}
-        }
+        },
+        "mounts": {
+          "length": 0,
+          "elements": {}
+        },
+        "allow_elevated": false
       }
     }
   }
@@ -151,7 +199,7 @@ to the TOML definition for that image. For example:
 
 ```toml
 [[container]]
-name = "rust:1.52.1"
+image_name = "rust:1.52.1"
 command = ["rustc", "--help"]
 
 [auth]

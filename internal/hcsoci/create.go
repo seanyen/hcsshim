@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
@@ -101,38 +102,38 @@ func verifyCloneContainerSpecs(templateSpec, cloneSpec *specs.Spec) error {
 
 	// for annotations check that the values of memory & cpu annotations are same
 	if templateSpec.Annotations[annotations.ContainerMemorySizeInMB] != cloneSpec.Annotations[annotations.ContainerMemorySizeInMB] {
-		return fmt.Errorf("memory size limit for template and clone containers can not be different")
+		return errors.New("memory size limit for template and clone containers can not be different")
 	}
 	if templateSpec.Annotations[annotations.ContainerProcessorCount] != cloneSpec.Annotations[annotations.ContainerProcessorCount] {
-		return fmt.Errorf("processor count for template and clone containers can not be different")
+		return errors.New("processor count for template and clone containers can not be different")
 	}
 	if templateSpec.Annotations[annotations.ContainerProcessorLimit] != cloneSpec.Annotations[annotations.ContainerProcessorLimit] {
-		return fmt.Errorf("processor limit for template and clone containers can not be different")
+		return errors.New("processor limit for template and clone containers can not be different")
 	}
 
 	// LayerFolders should be identical except for the last element.
 	if !cmpSlices(templateSpec.Windows.LayerFolders[:len(templateSpec.Windows.LayerFolders)-1], cloneSpec.Windows.LayerFolders[:len(cloneSpec.Windows.LayerFolders)-1]) {
-		return fmt.Errorf("layers provided for template container and clone container don't match. Check the image specified in container config")
+		return errors.New("layers provided for template container and clone container don't match. Check the image specified in container config")
 	}
 
-	if templateSpec.Windows.HyperV != cloneSpec.Windows.HyperV {
-		return fmt.Errorf("HyperV spec for template and clone containers can not be different")
+	if !reflect.DeepEqual(templateSpec.Windows.HyperV, cloneSpec.Windows.HyperV) {
+		return errors.New("HyperV spec for template and clone containers can not be different")
 	}
 
 	if templateSpec.Windows.Network.AllowUnqualifiedDNSQuery != cloneSpec.Windows.Network.AllowUnqualifiedDNSQuery {
-		return fmt.Errorf("different values for allow unqualified DNS query can not be provided for template and clones")
+		return errors.New("different values for allow unqualified DNS query can not be provided for template and clones")
 	}
 	if templateSpec.Windows.Network.NetworkSharedContainerName != cloneSpec.Windows.Network.NetworkSharedContainerName {
-		return fmt.Errorf("different network shared name can not be provided for template and clones")
+		return errors.New("different network shared name can not be provided for template and clones")
 	}
 	if !cmpSlices(templateSpec.Windows.Network.DNSSearchList, cloneSpec.Windows.Network.DNSSearchList) {
-		return fmt.Errorf("different DNS search list can not be provided for template and clones")
+		return errors.New("different DNS search list can not be provided for template and clones")
 	}
+
 	return nil
 }
 
 func validateContainerConfig(ctx context.Context, coi *createOptionsInternal) error {
-
 	if coi.HostingSystem != nil && coi.HostingSystem.IsTemplate && !coi.isTemplate {
 		return fmt.Errorf("only a template container can be created inside a template pod. Any other combination is not valid")
 	}
@@ -333,7 +334,7 @@ func CreateContainer(ctx context.Context, createOptions *CreateOptions) (_ cow.C
 			log.G(ctx).WithError(err).Debug("failed to allocateLinuxResources")
 			return nil, r, err
 		}
-		gcsDocument, err = createLinuxContainerDocument(ctx, coi, r.ContainerRootInUVM())
+		gcsDocument, err = createLinuxContainerDocument(ctx, coi, r.ContainerRootInUVM(), r.LcowScratchPath())
 		if err != nil {
 			log.G(ctx).WithError(err).Debug("failed createHCSContainerDocument")
 			return nil, r, err

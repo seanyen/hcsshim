@@ -94,6 +94,12 @@ const (
 	// HostProcessContainer indicates to launch a host process container (job container in this repository).
 	HostProcessContainer = "microsoft.com/hostprocess-container"
 
+	// HostProcessRootfsLocation indicates where the rootfs for a host process container should be located. If file binding support is
+	// available (Windows versions 20H1 and up) this will be the absolute path where the rootfs for a container will be located on the host
+	// and will be unique per container. On < 20H1 hosts, the location will be C:\<path-supplied>\<containerID>. So for example, if the value
+	// supplied was C:\rootfs and the container's ID is 12345678 the rootfs will be located at C:\rootfs\12345678.
+	HostProcessRootfsLocation = "microsoft.com/hostprocess-rootfs-location"
+
 	// AllowOvercommit indicates if we should allow over commit memory for UVM.
 	// Defaults to true. For physical backed memory, set to false.
 	AllowOvercommit = "io.microsoft.virtualmachine.computetopology.memory.allowovercommit"
@@ -260,6 +266,9 @@ const (
 
 	// GuestStateFile specifies the path of the vmgs file to use if required. Only applies in SNP mode.
 	GuestStateFile = "io.microsoft.virtualmachine.lcow.gueststatefile"
+
+	// SecurityPolicyEnv specifies if SECURITY_POLICY variable should be injected for a container.
+	SecurityPolicyEnv = "io.microsoft.virtualmachine.lcow.securitypolicy.env"
 
 	// DisableLCOWTimeSyncService is used to disable the chronyd time
 	// synchronization service inside the LCOW UVM.

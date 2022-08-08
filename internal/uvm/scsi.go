@@ -1,3 +1,5 @@
+//go:build windows
+
 package uvm
 
 import (
@@ -8,10 +10,8 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
-	"github.com/Microsoft/go-winio/pkg/security"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
@@ -21,6 +21,7 @@ import (
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
+	"github.com/Microsoft/hcsshim/internal/security"
 	"github.com/Microsoft/hcsshim/internal/wclayer"
 )
 
@@ -169,8 +170,8 @@ func newSCSIMount(
 // SCSI controllers associated with a utility VM to use.
 // Lock must be held when calling this function
 func (uvm *UtilityVM) allocateSCSISlot(ctx context.Context) (int, int, error) {
-	for controller, luns := range uvm.scsiLocations {
-		for lun, sm := range luns {
+	for controller := 0; controller < int(uvm.scsiControllerCount); controller++ {
+		for lun, sm := range uvm.scsiLocations[controller] {
 			// If sm is nil, we have found an open slot so we allocate a new SCSIMount
 			if sm == nil {
 				return controller, lun, nil
@@ -224,7 +225,7 @@ func (uvm *UtilityVM) RemoveSCSI(ctx context.Context, hostPath string) error {
 
 	scsiModification := &hcsschema.ModifySettingRequest{
 		RequestType:  guestrequest.RequestTypeRemove,
-		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, strconv.Itoa(sm.Controller), sm.LUN),
+		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, guestrequest.ScsiControllerGuids[sm.Controller], sm.LUN),
 	}
 
 	var verity *guestresource.DeviceVerityInfo
@@ -408,11 +409,6 @@ func (uvm *UtilityVM) addSCSIActual(ctx context.Context, addReq *addSCSIRequest)
 		return nil, ErrNoSCSIControllers
 	}
 
-	// Note: Can remove this check post-RS5 if multiple controllers are supported
-	if sm.Controller > 0 {
-		return nil, ErrTooManyAttachments
-	}
-
 	SCSIModification := &hcsschema.ModifySettingRequest{
 		RequestType: guestrequest.RequestTypeAdd,
 		Settings: hcsschema.Attachment{
@@ -421,7 +417,7 @@ func (uvm *UtilityVM) addSCSIActual(ctx context.Context, addReq *addSCSIRequest)
 			ReadOnly:                  addReq.readOnly,
 			ExtensibleVirtualDiskType: addReq.evdType,
 		},
-		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, strconv.Itoa(sm.Controller), sm.LUN),
+		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, guestrequest.ScsiControllerGuids[sm.Controller], sm.LUN),
 	}
 
 	if sm.UVMPath != "" {
@@ -521,7 +517,6 @@ func (uvm *UtilityVM) allocateSCSIMount(
 	log.G(ctx).WithFields(uvm.scsiLocations[controller][lun].logFormat()).Debug("allocated SCSI mount")
 
 	return uvm.scsiLocations[controller][lun], false, nil
-
 }
 
 // GetScsiUvmPath returns the guest mounted path of a SCSI drive.
@@ -637,7 +632,7 @@ func (sm *SCSIMount) Clone(ctx context.Context, vm *UtilityVM, cd *cloneData) er
 		dstVhdPath string = sm.HostPath
 		err        error
 		dir        string
-		conStr     string = fmt.Sprintf("%d", sm.Controller)
+		conStr     string = guestrequest.ScsiControllerGuids[sm.Controller]
 		lunStr     string = fmt.Sprintf("%d", sm.LUN)
 	)
 

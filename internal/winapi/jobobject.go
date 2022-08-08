@@ -1,3 +1,5 @@
+//go:build windows
+
 package winapi
 
 import (
@@ -24,7 +26,10 @@ const (
 // Access rights for creating or opening job objects.
 //
 // https://docs.microsoft.com/en-us/windows/win32/procthread/job-object-security-and-access-rights
-const JOB_OBJECT_ALL_ACCESS = 0x1F001F
+const (
+	JOB_OBJECT_QUERY      = 0x0004
+	JOB_OBJECT_ALL_ACCESS = 0x1F001F
+)
 
 // IO limit flags
 //
@@ -52,6 +57,8 @@ const (
 	JobObjectLimitViolationInformation       uint32 = 13
 	JobObjectMemoryUsageInformation          uint32 = 28
 	JobObjectNotificationLimitInformation2   uint32 = 33
+	JobObjectCreateSilo                      uint32 = 35
+	JobObjectSiloBasicInformation            uint32 = 36
 	JobObjectIoAttribution                   uint32 = 42
 )
 
@@ -162,7 +169,7 @@ type JOBOBJECT_ASSOCIATE_COMPLETION_PORT struct {
 // 		PBOOL  Result
 // );
 //
-//sys IsProcessInJob(procHandle windows.Handle, jobHandle windows.Handle, result *bool) (err error) = kernel32.IsProcessInJob
+//sys IsProcessInJob(procHandle windows.Handle, jobHandle windows.Handle, result *int32) (err error) = kernel32.IsProcessInJob
 
 // BOOL QueryInformationJobObject(
 //		HANDLE             hJob,
@@ -172,7 +179,7 @@ type JOBOBJECT_ASSOCIATE_COMPLETION_PORT struct {
 //		LPDWORD            lpReturnLength
 // );
 //
-//sys QueryInformationJobObject(jobHandle windows.Handle, infoClass uint32, jobObjectInfo uintptr, jobObjectInformationLength uint32, lpReturnLength *uint32) (err error) = kernel32.QueryInformationJobObject
+//sys QueryInformationJobObject(jobHandle windows.Handle, infoClass uint32, jobObjectInfo unsafe.Pointer, jobObjectInformationLength uint32, lpReturnLength *uint32) (err error) = kernel32.QueryInformationJobObject
 
 // HANDLE OpenJobObjectW(
 //		DWORD   dwDesiredAccess,

@@ -1,8 +1,6 @@
 //go:build linux
 // +build linux
 
-// Package bridge defines the bridge struct, which implements the control loop
-// and functions of the GCS's bridge client.
 package bridge
 
 import (
@@ -19,15 +17,16 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"go.opencensus.io/trace"
+	"go.opencensus.io/trace/tracestate"
+
 	"github.com/Microsoft/hcsshim/internal/guest/gcserr"
 	"github.com/Microsoft/hcsshim/internal/guest/prot"
 	"github.com/Microsoft/hcsshim/internal/guest/runtime/hcsv2"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/oc"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-	"go.opencensus.io/trace"
-	"go.opencensus.io/trace/tracestate"
 )
 
 // UnknownMessage represents the default handler logic for an unmatched request
@@ -133,7 +132,7 @@ func (mux *Mux) ServeMsg(r *Request) (RequestResponse, error) {
 type Request struct {
 	// Context is the request context received from the bridge.
 	Context context.Context
-	// Header is the wire format message header that preceeded the message for
+	// Header is the wire format message header that preceded the message for
 	// this request.
 	Header *prot.MessageHeader
 	// ContainerID is the id of the container that this message corresponds to.
@@ -166,7 +165,7 @@ type bridgeResponse struct {
 // It has two fundamentally different dispatch options:
 //
 // 1. Request/Response where using the `Handler` a request
-//    of a given type will be dispatched to the apprpriate handler
+//    of a given type will be dispatched to the appropriate handler
 //    and an appropriate response will respond to exactly that request that
 //    caused the dispatch.
 //
@@ -290,9 +289,18 @@ func (b *Bridge) ListenAndServe(bridgeIn io.ReadCloser, bridgeOut io.WriteCloser
 							}
 						}
 					}
-					ctx, span = trace.StartSpanWithRemoteParent(context.Background(), "opengcs::bridge::request", sc)
+					ctx, span = oc.StartSpanWithRemoteParent(
+						context.Background(),
+						"opengcs::bridge::request",
+						sc,
+						oc.WithServerSpanKind,
+					)
 				} else {
-					ctx, span = trace.StartSpan(context.Background(), "opengcs::bridge::request")
+					ctx, span = oc.StartSpan(
+						context.Background(),
+						"opengcs::bridge::request",
+						oc.WithServerSpanKind,
+					)
 				}
 
 				span.AddAttributes(
@@ -412,7 +420,9 @@ func (b *Bridge) ListenAndServe(bridgeIn io.ReadCloser, bridgeOut io.WriteCloser
 
 // PublishNotification writes a specific notification to the bridge.
 func (b *Bridge) PublishNotification(n *prot.ContainerNotification) {
-	ctx, span := trace.StartSpan(context.Background(), "opengcs::bridge::PublishNotification")
+	ctx, span := oc.StartSpan(context.Background(),
+		"opengcs::bridge::PublishNotification",
+		oc.WithClientSpanKind)
 	span.AddAttributes(trace.StringAttribute("notification", fmt.Sprintf("%+v", n)))
 	// DONT defer span.End() here. Publish is odd because bridgeResponse calls
 	// `End` on the `ctx` after the response is sent.

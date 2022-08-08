@@ -15,6 +15,7 @@ import (
 	"go.opencensus.io/trace"
 
 	"github.com/Microsoft/hcsshim/internal/guest/network"
+	specInternal "github.com/Microsoft/hcsshim/internal/guest/spec"
 	"github.com/Microsoft/hcsshim/internal/guestpath"
 	"github.com/Microsoft/hcsshim/internal/oc"
 )
@@ -36,7 +37,7 @@ func getStandaloneResolvPath(id string) string {
 }
 
 func setupStandaloneContainerSpec(ctx context.Context, id string, spec *oci.Spec) (err error) {
-	ctx, span := trace.StartSpan(ctx, "hcsv2::setupStandaloneContainerSpec")
+	ctx, span := oc.StartSpan(ctx, "hcsv2::setupStandaloneContainerSpec")
 	defer span.End()
 	defer func() { oc.SetSpanStatus(span, err) }()
 	span.AddAttributes(trace.StringAttribute("cid", id))
@@ -62,7 +63,7 @@ func setupStandaloneContainerSpec(ctx context.Context, id string, spec *oci.Spec
 	}
 
 	// Write the hostname
-	if !isInMounts("/etc/hostname", spec.Mounts) {
+	if !specInternal.MountPresent("/etc/hostname", spec.Mounts) {
 		standaloneHostnamePath := getStandaloneHostnamePath(id)
 		if err := ioutil.WriteFile(standaloneHostnamePath, []byte(hostname+"\n"), 0644); err != nil {
 			return errors.Wrapf(err, "failed to write hostname to %q", standaloneHostnamePath)
@@ -81,7 +82,7 @@ func setupStandaloneContainerSpec(ctx context.Context, id string, spec *oci.Spec
 	}
 
 	// Write the hosts
-	if !isInMounts("/etc/hosts", spec.Mounts) {
+	if !specInternal.MountPresent("/etc/hosts", spec.Mounts) {
 		standaloneHostsContent := network.GenerateEtcHostsContent(ctx, hostname)
 		standaloneHostsPath := getStandaloneHostsPath(id)
 		if err := ioutil.WriteFile(standaloneHostsPath, []byte(standaloneHostsContent), 0644); err != nil {
@@ -101,8 +102,8 @@ func setupStandaloneContainerSpec(ctx context.Context, id string, spec *oci.Spec
 	}
 
 	// Write resolv.conf
-	if !isInMounts("/etc/resolv.conf", spec.Mounts) {
-		ns := getOrAddNetworkNamespace(getNetworkNamespaceID(spec))
+	if !specInternal.MountPresent("/etc/resolv.conf", spec.Mounts) {
+		ns := GetOrAddNetworkNamespace(getNetworkNamespaceID(spec))
 		var searches, servers []string
 		for _, n := range ns.Adapters() {
 			if len(n.DNSSuffix) > 0 {

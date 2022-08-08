@@ -68,14 +68,10 @@ func ParseEnvFromImage(img v1.Image) ([]string, error) {
 // be included by default in the security policy.
 // The slice includes only a sandbox pause container.
 func DefaultContainerConfigs() []securitypolicy.ContainerConfig {
-	pause := securitypolicy.NewContainerConfig(
-		"k8s.gcr.io/pause:3.1",
-		[]string{"/pause"},
-		[]securitypolicy.EnvRuleConfig{},
-		securitypolicy.AuthConfig{},
-		"",
-		[]string{},
-	)
+	pause := securitypolicy.ContainerConfig{
+		ImageName: "k8s.gcr.io/pause:3.1",
+		Command:   []string{"/pause"},
+	}
 	return []securitypolicy.ContainerConfig{pause}
 }
 
@@ -91,6 +87,19 @@ func ParseWorkingDirFromImage(img v1.Image) (string, error) {
 		return imgConfig.Config.WorkingDir, nil
 	}
 	return "/", nil
+}
+
+// ParseCommandFromImage inspects the image and returns the command args, which
+// is a combination of ENTRYPOINT and CMD Docker directives.
+func ParseCommandFromImage(img v1.Image) ([]string, error) {
+	imgConfig, err := img.ConfigFile()
+	if err != nil {
+		return nil, err
+	}
+
+	cmdArgs := imgConfig.Config.Entrypoint
+	cmdArgs = append(cmdArgs, imgConfig.Config.Cmd...)
+	return cmdArgs, nil
 }
 
 // PolicyContainersFromConfigs returns a slice of securitypolicy.Container generated
@@ -119,6 +128,13 @@ func PolicyContainersFromConfigs(containerConfigs []securitypolicy.ContainerConf
 			return nil, err
 		}
 
+		commandArgs := containerConfig.Command
+		if len(commandArgs) == 0 {
+			commandArgs, err = ParseCommandFromImage(img)
+			if err != nil {
+				return nil, err
+			}
+		}
 		// add rules for all known environment variables from the configuration
 		// these are in addition to "other rules" from the policy definition file
 		envVars, err := ParseEnvFromImage(img)
@@ -137,12 +153,14 @@ func PolicyContainersFromConfigs(containerConfigs []securitypolicy.ContainerConf
 			workingDir = containerConfig.WorkingDir
 		}
 
-		container, err := securitypolicy.NewContainer(
-			containerConfig.Command,
+		container, err := securitypolicy.CreateContainerPolicy(
+			commandArgs,
 			layerHashes,
 			envRules,
 			workingDir,
-			containerConfig.ExpectedMounts,
+			containerConfig.WaitMountPoints,
+			containerConfig.Mounts,
+			containerConfig.AllowElevated,
 		)
 		if err != nil {
 			return nil, err

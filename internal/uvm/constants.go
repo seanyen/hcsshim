@@ -2,6 +2,9 @@ package uvm
 
 import (
 	"errors"
+
+	"github.com/Microsoft/hcsshim/internal/memory"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 )
 
 const (
@@ -15,10 +18,13 @@ const (
 
 	// DefaultVPMemSizeBytes is the default size of a VPMem device if the create request
 	// doesn't specify.
-	DefaultVPMemSizeBytes = 4 * 1024 * 1024 * 1024 // 4GB
+	DefaultVPMemSizeBytes = 4 * memory.GiB // 4GB
 )
 
 var (
 	errNotSupported = errors.New("not supported")
 	errBadUVMOpts   = errors.New("UVM options incorrect")
+
+	// Maximum number of SCSI controllers allowed
+	MaxSCSIControllers = uint32(len(guestrequest.ScsiControllerGuids))
 )

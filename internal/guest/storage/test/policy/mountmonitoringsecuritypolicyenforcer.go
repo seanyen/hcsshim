@@ -1,3 +1,6 @@
+//go:build linux
+// +build linux
+
 package policy
 
 import (
@@ -6,8 +9,9 @@ import (
 	"github.com/Microsoft/hcsshim/pkg/securitypolicy"
 )
 
-// For testing. Records the number of calls to each method so we can verify
-// the expected interactions took place.
+// MountMonitoringSecurityPolicyEnforcer is used for testing and records the
+// number of calls to each method, so we can verify the expected interactions
+// took place.
 type MountMonitoringSecurityPolicyEnforcer struct {
 	DeviceMountCalls   int
 	DeviceUnmountCalls int
@@ -16,25 +20,37 @@ type MountMonitoringSecurityPolicyEnforcer struct {
 
 var _ securitypolicy.SecurityPolicyEnforcer = (*MountMonitoringSecurityPolicyEnforcer)(nil)
 
-func (p *MountMonitoringSecurityPolicyEnforcer) EnforceDeviceMountPolicy(target string, deviceHash string) (err error) {
+func (p *MountMonitoringSecurityPolicyEnforcer) EnforceDeviceMountPolicy(_ string, _ string) error {
 	p.DeviceMountCalls++
 	return nil
 }
 
-func (p *MountMonitoringSecurityPolicyEnforcer) EnforceDeviceUnmountPolicy(target string) (err error) {
+func (p *MountMonitoringSecurityPolicyEnforcer) EnforceDeviceUnmountPolicy(_ string) error {
 	p.DeviceUnmountCalls++
 	return nil
 }
 
-func (p *MountMonitoringSecurityPolicyEnforcer) EnforceOverlayMountPolicy(containerID string, layerPaths []string) (err error) {
+func (p *MountMonitoringSecurityPolicyEnforcer) EnforceOverlayMountPolicy(_ string, _ []string) error {
 	p.OverlayMountCalls++
 	return nil
 }
 
-func (p *MountMonitoringSecurityPolicyEnforcer) EnforceCreateContainerPolicy(_ string, _ []string, _ []string, _ string) (err error) {
+func (MountMonitoringSecurityPolicyEnforcer) EnforceCreateContainerPolicy(_ string, _ []string, _ []string, _ string) error {
 	return nil
 }
 
-func (p *MountMonitoringSecurityPolicyEnforcer) EnforceExpectedMountsPolicy(_ string, _ *oci.Spec) error {
+func (MountMonitoringSecurityPolicyEnforcer) EnforceMountPolicy(_, _ string, _ *oci.Spec) error {
 	return nil
+}
+
+func (MountMonitoringSecurityPolicyEnforcer) EnforceWaitMountPointsPolicy(_ string, _ *oci.Spec) error {
+	return nil
+}
+
+func (MountMonitoringSecurityPolicyEnforcer) ExtendDefaultMounts(_ []oci.Mount) error {
+	return nil
+}
+
+func (MountMonitoringSecurityPolicyEnforcer) EncodedSecurityPolicy() string {
+	return ""
 }

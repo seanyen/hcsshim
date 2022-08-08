@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -11,9 +13,9 @@ import (
 	"strings"
 
 	"github.com/Microsoft/hcsshim/internal/cmd"
+	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/uvm"
 	"github.com/containerd/console"
-	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
 )
 
@@ -87,7 +89,7 @@ var wcowCommand = cli.Command{
 			if wcowCommandLine != "" {
 				cmd := cmd.Command(vm, "cmd.exe", "/c", wcowCommandLine)
 				cmd.Spec.User.Username = `NT AUTHORITY\SYSTEM`
-				cmd.Log = logrus.NewEntry(logrus.StandardLogger())
+				cmd.Log = log.L.Dup()
 				if wcowUseTerminal {
 					cmd.Spec.Terminal = true
 					cmd.Stdin = os.Stdin

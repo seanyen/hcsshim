@@ -1,3 +1,5 @@
+//go:build windows
+
 package uvm
 
 import (
@@ -6,17 +8,18 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/Microsoft/go-winio"
+	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/pkg/errors"
 	"go.opencensus.io/trace"
 
-	"github.com/Microsoft/go-winio"
-	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/Microsoft/hcsshim/internal/gcs"
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/logfields"
 	"github.com/Microsoft/hcsshim/internal/oc"
 	"github.com/Microsoft/hcsshim/internal/processorinfo"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/schemaversion"
 	"github.com/Microsoft/hcsshim/internal/uvmfolder"
 	"github.com/Microsoft/hcsshim/internal/wclayer"
@@ -86,7 +89,7 @@ func prepareConfigDoc(ctx context.Context, uvm *UtilityVM, opts *OptionsWCOW, uv
 		return nil, fmt.Errorf("failed to get host processor information: %s", err)
 	}
 
-	// To maintain compatability with Docker we need to automatically downgrade
+	// To maintain compatibility with Docker we need to automatically downgrade
 	// a user CPU count if the setting is not possible.
 	uvm.processorCount = uvm.normalizeProcessorCount(ctx, opts.ProcessorCount, processorTopology)
 
@@ -230,7 +233,7 @@ func prepareConfigDoc(ctx context.Context, uvm *UtilityVM, opts *OptionsWCOW, uv
 //   - The scratch is always attached to SCSI 0:0
 //
 func CreateWCOW(ctx context.Context, opts *OptionsWCOW) (_ *UtilityVM, err error) {
-	ctx, span := trace.StartSpan(ctx, "uvm::CreateWCOW")
+	ctx, span := oc.StartSpan(ctx, "uvm::CreateWCOW")
 	defer span.End()
 	defer func() { oc.SetSpanStatus(span, err) }()
 
@@ -249,7 +252,7 @@ func CreateWCOW(ctx context.Context, opts *OptionsWCOW) (_ *UtilityVM, err error
 		id:                      opts.ID,
 		owner:                   opts.Owner,
 		operatingSystem:         "windows",
-		scsiControllerCount:     1,
+		scsiControllerCount:     opts.SCSIControllerCount,
 		vsmbDirShares:           make(map[string]*VSMBShare),
 		vsmbFileShares:          make(map[string]*VSMBShare),
 		vpciDevices:             make(map[VPCIDeviceKey]*VPCIDevice),
@@ -277,10 +280,10 @@ func CreateWCOW(ctx context.Context, opts *OptionsWCOW) (_ *UtilityVM, err error
 	}
 
 	// TODO: BUGBUG Remove this. @jhowardmsft
-	//       It should be the responsiblity of the caller to do the creation and population.
+	//       It should be the responsibility of the caller to do the creation and population.
 	//       - Update runhcs too (vm.go).
 	//       - Remove comment in function header
-	//       - Update tests that rely on this current behaviour.
+	//       - Update tests that rely on this current behavior.
 	// Create the RW scratch in the top-most layer folder, creating the folder if it doesn't already exist.
 	scratchFolder := opts.LayerFolders[len(opts.LayerFolders)-1]
 
@@ -310,21 +313,23 @@ func CreateWCOW(ctx context.Context, opts *OptionsWCOW) (_ *UtilityVM, err error
 			}
 		}
 
-		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{
-			"0": {
-				Attachments: map[string]hcsschema.Attachment{
-					"0": {
-						Path:  scratchPath,
-						Type_: "VirtualDisk",
-					},
-				},
-			},
+		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{}
+		for i := 0; i < int(uvm.scsiControllerCount); i++ {
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[i]] = hcsschema.Scsi{
+				Attachments: make(map[string]hcsschema.Attachment),
+			}
+		}
+
+		doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[0]].Attachments["0"] = hcsschema.Attachment{
+
+			Path:  scratchPath,
+			Type_: "VirtualDisk",
 		}
 
 		uvm.scsiLocations[0][0] = newSCSIMount(uvm,
-			doc.VirtualMachine.Devices.Scsi["0"].Attachments["0"].Path,
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[0]].Attachments["0"].Path,
 			"",
-			doc.VirtualMachine.Devices.Scsi["0"].Attachments["0"].Type_,
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[0]].Attachments["0"].Type_,
 			"",
 			1,
 			0,

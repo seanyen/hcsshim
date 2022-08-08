@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -73,7 +75,7 @@ func (s *service) stateInternal(ctx context.Context, req *task.StateRequest) (*t
 func (s *service) createInternal(ctx context.Context, req *task.CreateTaskRequest) (*task.CreateTaskResponse, error) {
 	setupDebuggerEvent()
 
-	var shimOpts *runhcsopts.Options
+	shimOpts := &runhcsopts.Options{}
 	if req.Options != nil {
 		v, err := typeurl.UnmarshalAny(req.Options)
 		if err != nil {
@@ -100,6 +102,18 @@ func (s *service) createInternal(ctx context.Context, req *task.CreateTaskReques
 	// raise it rather than suppress and move on
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to process OCI Spec annotations")
+	}
+
+	// If sandbox isolation is set to hypervisor, make sure the HyperV option
+	// is filled in. This lessens the burden on Containerd to parse our shims
+	// options if we can set this ourselves.
+	if shimOpts.SandboxIsolation == runhcsopts.Options_HYPERVISOR {
+		if spec.Windows == nil {
+			spec.Windows = &specs.Windows{}
+		}
+		if spec.Windows.HyperV == nil {
+			spec.Windows.HyperV = &specs.WindowsHyperV{}
+		}
 	}
 
 	if len(req.Rootfs) == 0 {
@@ -131,17 +145,8 @@ func (s *service) createInternal(ctx context.Context, req *task.CreateTaskReques
 			}
 		}
 
-		if m.Type == "lcow-layer" {
-			// If we are creating LCOW make sure that spec.Windows is filled out before
-			// appending layer folders.
-			if spec.Windows == nil {
-				spec.Windows = &specs.Windows{}
-			}
-			if spec.Windows.HyperV == nil {
-				spec.Windows.HyperV = &specs.WindowsHyperV{}
-			}
-		} else if spec.Windows.HyperV == nil {
-			// This is a Windows Argon make sure that we have a Root filled in.
+		// This is a Windows Argon make sure that we have a Root filled in.
+		if spec.Windows.HyperV == nil {
 			if spec.Root == nil {
 				spec.Root = &specs.Root{}
 			}

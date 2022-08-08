@@ -9,24 +9,27 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"unsafe"
 
 	"github.com/pkg/errors"
 
 	"github.com/Microsoft/hcsshim/ext4/internal/compactext4"
+	"github.com/Microsoft/hcsshim/internal/memory"
 )
 
 const (
 	blockSize = compactext4.BlockSize
 	// MerkleTreeBufioSize is a default buffer size to use with bufio.Reader
-	MerkleTreeBufioSize = 1024 * 1024 // 1MB
+	MerkleTreeBufioSize = memory.MiB // 1MB
 	// RecommendedVHDSizeGB is the recommended size in GB for VHDs, which is not a hard limit.
-	RecommendedVHDSizeGB = 128 * 1024 * 1024 * 1024
+	RecommendedVHDSizeGB = 128 * memory.GiB
 	// VeritySignature is a value written to dm-verity super-block.
 	VeritySignature = "verity"
 )
 
-var salt = bytes.Repeat([]byte{0}, 32)
+var (
+	salt   = bytes.Repeat([]byte{0}, 32)
+	sbSize = binary.Size(dmveritySuperblock{})
+)
 
 var (
 	ErrSuperBlockReadFailure  = errors.New("failed to read dm-verity super block")
@@ -233,7 +236,6 @@ func ComputeAndWriteHashDevice(r io.ReadSeeker, w io.WriteSeeker) error {
 		return errors.Wrap(err, "failed to write dm-verity super-block")
 	}
 	// write super-block padding
-	sbSize := int(unsafe.Sizeof(*dmVeritySB))
 	padding := bytes.Repeat([]byte{0}, blockSize-(sbSize%blockSize))
 	if _, err = w.Write(padding); err != nil {
 		return err

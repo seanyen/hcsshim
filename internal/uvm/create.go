@@ -1,3 +1,5 @@
+//go:build windows
+
 package uvm
 
 import (
@@ -74,7 +76,7 @@ type Options struct {
 	// far as the container is concerned and it is only able to view the NICs in the compartment it's assigned to.
 	// This is the compartment setup (and behavior) that is followed for V1 HCS schema containers (docker) so
 	// this change brings parity as well. This behavior is gated behind a registry key currently to avoid any
-	// unneccessary behavior and once this restriction is removed then we can remove the need for this variable
+	// unnecessary behavior and once this restriction is removed then we can remove the need for this variable
 	// and the associated annotation as well.
 	DisableCompartmentNamespace bool
 
@@ -94,6 +96,9 @@ type Options struct {
 
 	// NoWritableFileShares disables adding any writable vSMB and Plan9 shares to the UVM
 	NoWritableFileShares bool
+
+	// The number of SCSI controllers. Defaults to 1 for WCOW and 4 for LCOW
+	SCSIControllerCount uint32
 }
 
 // compares the create opts used during template creation with the create opts
@@ -131,8 +136,8 @@ func verifyOptions(ctx context.Context, options interface{}) error {
 		if opts.EnableDeferredCommit && !opts.AllowOvercommit {
 			return errors.New("EnableDeferredCommit is not supported on physically backed VMs")
 		}
-		if opts.SCSIControllerCount > 1 {
-			return errors.New("SCSI controller count must be 0 or 1") // Future extension here for up to 4
+		if opts.SCSIControllerCount > MaxSCSIControllers {
+			return fmt.Errorf("SCSI controller count can't be more than %d", MaxSCSIControllers)
 		}
 		if opts.VPMemDeviceCount > MaxVPMEMCount {
 			return fmt.Errorf("VPMem device count cannot be greater than %d", MaxVPMEMCount)
@@ -140,10 +145,6 @@ func verifyOptions(ctx context.Context, options interface{}) error {
 		if opts.VPMemDeviceCount > 0 {
 			if opts.VPMemSizeBytes%4096 != 0 {
 				return errors.New("VPMemSizeBytes must be a multiple of 4096")
-			}
-		} else {
-			if opts.PreferredRootFSType == PreferredRootFSTypeVHD {
-				return errors.New("PreferredRootFSTypeVHD requires at least one VPMem device")
 			}
 		}
 		if opts.KernelDirect && osversion.Build() < 18286 {
@@ -159,6 +160,9 @@ func verifyOptions(ctx context.Context, options interface{}) error {
 		}
 		if len(opts.LayerFolders) < 2 {
 			return errors.New("at least 2 LayerFolders must be supplied")
+		}
+		if opts.SCSIControllerCount != 1 {
+			return errors.New("exactly 1 SCSI controller is required for WCOW")
 		}
 		if opts.IsClone && !verifyCloneUvmCreateOpts(&opts.TemplateConfig.CreateOpts, opts) {
 			return errors.New("clone configuration doesn't match with template configuration")
@@ -188,6 +192,7 @@ func newDefaultOptions(id, owner string) *Options {
 		ProcessorCount:        defaultProcessorCount(),
 		FullyPhysicallyBacked: false,
 		NoWritableFileShares:  false,
+		SCSIControllerCount:   1,
 	}
 
 	if opts.Owner == "" {
@@ -238,7 +243,7 @@ func (uvm *UtilityVM) create(ctx context.Context, doc interface{}) error {
 
 // Close terminates and releases resources associated with the utility VM.
 func (uvm *UtilityVM) Close() (err error) {
-	ctx, span := trace.StartSpan(context.Background(), "uvm::Close")
+	ctx, span := oc.StartSpan(context.Background(), "uvm::Close")
 	defer span.End()
 	defer func() { oc.SetSpanStatus(span, err) }()
 	span.AddAttributes(trace.StringAttribute(logfields.UVMID, uvm.id))

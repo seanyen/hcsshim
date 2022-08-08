@@ -1,3 +1,5 @@
+//go:build windows
+
 package jobcontainers
 
 import (
@@ -5,6 +7,7 @@ import (
 
 	"github.com/Microsoft/hcsshim/internal/hcsoci"
 	"github.com/Microsoft/hcsshim/internal/jobobject"
+	"github.com/Microsoft/hcsshim/internal/memory"
 	"github.com/Microsoft/hcsshim/internal/processorinfo"
 	"github.com/Microsoft/hcsshim/pkg/annotations"
 
@@ -16,6 +19,11 @@ import (
 // structures/limits to be applied to a job object.
 
 const processorWeightMax = 10000
+
+// customRootfsLocation grabs the value of the annotation exposed that sets a custom rootfs location for the job container.
+func customRootfsLocation(annots map[string]string) string {
+	return annots[annotations.HostProcessRootfsLocation]
+}
 
 // inheritUserTokenIsSet checks if the annotation that specifies whether we should inherit the token of the current process is set.
 func inheritUserTokenIsSet(annots map[string]string) bool {
@@ -55,7 +63,7 @@ func specToLimits(ctx context.Context, cid string, s *specs.Spec) (*jobobject.Jo
 		CPUWeight:          realCPUWeight,
 		MaxIOPS:            maxIops,
 		MaxBandwidth:       maxBandwidth,
-		MemoryLimitInBytes: memLimitMB * 1024 * 1024,
+		MemoryLimitInBytes: memLimitMB * memory.MiB,
 	}, nil
 }
 

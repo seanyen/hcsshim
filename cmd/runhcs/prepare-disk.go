@@ -1,3 +1,5 @@
+//go:build windows
+
 package main
 
 import (
@@ -10,7 +12,6 @@ import (
 	"github.com/Microsoft/hcsshim/osversion"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	"go.opencensus.io/trace"
 )
 
 const (
@@ -30,7 +31,7 @@ var prepareDiskCommand = cli.Command{
 	},
 	Before: appargs.Validate(),
 	Action: func(context *cli.Context) (err error) {
-		ctx, span := trace.StartSpan(gcontext.Background(), prepareDiskStr)
+		ctx, span := oc.StartSpan(gcontext.Background(), prepareDiskStr)
 		defer span.End()
 		defer func() { oc.SetSpanStatus(span, err) }()
 
@@ -44,6 +45,9 @@ var prepareDiskCommand = cli.Command{
 		}
 
 		opts := uvm.NewDefaultOptionsLCOW("preparedisk-uvm", context.GlobalString("owner"))
+		// Default SCSI controller count is 4, we don't need that for this UVM,
+		// bring it back to 1 to avoid any confusion with SCSI controller numbers.
+		opts.SCSIControllerCount = 1
 
 		preparediskUVM, err := uvm.CreateLCOW(ctx, opts)
 		if err != nil {

@@ -1,3 +1,5 @@
+//go:build windows
+
 package gcs
 
 import (
@@ -18,6 +20,8 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
 	"go.opencensus.io/trace/tracestate"
+
+	"github.com/Microsoft/hcsshim/internal/oc"
 )
 
 const pipePortFmt = `\\.\pipe\gctest-port-%d`
@@ -271,7 +275,7 @@ func Test_makeRequestNoSpan(t *testing.T) {
 }
 
 func Test_makeRequestWithSpan(t *testing.T) {
-	ctx, span := trace.StartSpan(context.Background(), t.Name())
+	ctx, span := oc.StartSpan(context.Background(), t.Name())
 	defer span.End()
 	r := makeRequest(ctx, t.Name())
 

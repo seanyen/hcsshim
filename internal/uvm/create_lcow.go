@@ -1,8 +1,9 @@
+//go:build windows
+
 package uvm
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/Microsoft/go-winio"
 	"github.com/Microsoft/go-winio/pkg/guid"
+	"github.com/Microsoft/hcsshim/pkg/securitypolicy"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"go.opencensus.io/trace"
@@ -23,11 +25,12 @@ import (
 	"github.com/Microsoft/hcsshim/internal/logfields"
 	"github.com/Microsoft/hcsshim/internal/oc"
 	"github.com/Microsoft/hcsshim/internal/processorinfo"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/schemaversion"
 	"github.com/Microsoft/hcsshim/osversion"
 )
 
-// General infomation about how this works at a high level.
+// General information about how this works at a high level.
 //
 // The purpose is to start an LCOW Utility VM or UVM using the Host Compute Service, an API to create and manipulate running virtual machines
 // HCS takes json descriptions of the work to be done.
@@ -86,7 +89,6 @@ type OptionsLCOW struct {
 	KernelBootOptions       string              // Additional boot options for the kernel
 	EnableGraphicsConsole   bool                // If true, enable a graphics console for the utility VM
 	ConsolePipe             string              // The named pipe path to use for the serial console.  eg \\.\pipe\vmpipe
-	SCSIControllerCount     uint32              // The number of SCSI controllers. Defaults to 1. Currently we only support 0 or 1.
 	UseGuestConnection      bool                // Whether the HCS should connect to the UVM's GCS. Defaults to true
 	ExecCommandLine         string              // The command line to exec from init. Defaults to GCS
 	ForwardStdout           bool                // Whether stdout will be forwarded from the executed program. Defaults to false
@@ -137,7 +139,6 @@ func NewDefaultOptionsLCOW(id, owner string) *OptionsLCOW {
 		KernelBootOptions:       "",
 		EnableGraphicsConsole:   false,
 		ConsolePipe:             "",
-		SCSIControllerCount:     1,
 		UseGuestConnection:      true,
 		ExecCommandLine:         fmt.Sprintf("/bin/gcs -v4 -log-format json -loglevel %s", logrus.StandardLogger().Level.String()),
 		ForwardStdout:           false,
@@ -181,7 +182,7 @@ func fetchProcessor(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (*hc
 		return nil, fmt.Errorf("failed to get host processor information: %s", err)
 	}
 
-	// To maintain compatability with Docker we need to automatically downgrade
+	// To maintain compatibility with Docker we need to automatically downgrade
 	// a user CPU count if the setting is not possible.
 	uvm.processorCount = uvm.normalizeProcessorCount(ctx, opts.ProcessorCount, processorTopology)
 
@@ -253,7 +254,8 @@ Example JSON document produced once the hcsschema.ComputeSytem returned by makeL
                          }
                      }
                 }
-            }
+            },
+            "Plan9": {}
         },
         "GuestState": {
             "GuestStateFilePath": "d:\\ken\\aug27\\gcsinitnew.vmgs",
@@ -279,7 +281,6 @@ Example JSON document produced once the hcsschema.ComputeSytem returned by makeL
 
 // Make a hcsschema.ComputeSytem with the parts that target booting from a VMGS file
 func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
-
 	// Kernel and initrd are combined into a single vmgs file.
 	vmgsFullPath := filepath.Join(opts.BootFilesPath, opts.GuestStateFile)
 	if _, err := os.Stat(vmgsFullPath); os.IsNotExist(err) {
@@ -324,6 +325,7 @@ func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ 
 						ServiceTable:                     make(map[string]hcsschema.HvSocketServiceConfig),
 					},
 				},
+				Plan9: &hcsschema.Plan9{},
 			},
 		},
 	}
@@ -352,11 +354,11 @@ func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ 
 	}
 
 	if uvm.scsiControllerCount > 0 {
-		// TODO: JTERRY75 - this should enumerate scsicount and add an entry per value.
-		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{
-			"0": {
+		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{}
+		for i := 0; i < int(uvm.scsiControllerCount); i++ {
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[i]] = hcsschema.Scsi{
 				Attachments: make(map[string]hcsschema.Attachment),
-			},
+			}
 		}
 	}
 
@@ -372,7 +374,7 @@ func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ 
 
 	doc.VirtualMachine.Chipset.Uefi = &hcsschema.Uefi{
 		ApplySecureBootTemplate: "Apply",
-		SecureBootTemplateId:    "1734c6e8-3154-4dda-ba5f-a874cc483422", // aka MicrosoftWindowsSecureBootTemplateGUID equivilent to "Microsoft Windows" template from Get-VMHost | select SecureBootTemplates,
+		SecureBootTemplateId:    "1734c6e8-3154-4dda-ba5f-a874cc483422", // aka MicrosoftWindowsSecureBootTemplateGUID equivalent to "Microsoft Windows" template from Get-VMHost | select SecureBootTemplates,
 
 	}
 
@@ -392,7 +394,6 @@ func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ 
 // Many details are quite different (see the typical JSON examples), in particular it boots from a VMGS file
 // which contains both the kernel and initrd as well as kernel boot options.
 func makeLCOWSecurityDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
-
 	doc, vmgsErr := makeLCOWVMGSDoc(ctx, opts, uvm)
 	if vmgsErr != nil {
 		return nil, vmgsErr
@@ -403,28 +404,23 @@ func makeLCOWSecurityDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM)
 	// and can be used to check that the policy used by opengcs is the required one as
 	// a condition of releasing secrets to the container.
 
-	// First, decode the base64 string into a human readable (json) string .
-	jsonPolicy, err := base64.StdEncoding.DecodeString(opts.SecurityPolicy)
+	policyDigest, err := securitypolicy.NewSecurityPolicyDigest(opts.SecurityPolicy)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode base64 SecurityPolicy")
+		return nil, err
 	}
-
-	// make a sha256 hashing object
-	hostData := sha256.New()
-	// give it the jsaon string to measure
-	hostData.Write(jsonPolicy)
-	// get the measurement out
-	securityPolicyHash := base64.StdEncoding.EncodeToString(hostData.Sum(nil))
+	// HCS API expect a base64 encoded string as LaunchData. Internally it
+	// decodes it to bytes. SEV later returns the decoded byte blob as HostData
+	// field of the report.
+	hostData := base64.StdEncoding.EncodeToString(policyDigest)
 
 	// Put the measurement into the LaunchData field of the HCS creation command.
-	// This will endup in HOST_DATA of SNP_LAUNCH_FINISH command the and ATTESTATION_REPORT
+	// This will end-up in HOST_DATA of SNP_LAUNCH_FINISH command the and ATTESTATION_REPORT
 	// retrieved by the guest later.
-
 	doc.VirtualMachine.SecuritySettings = &hcsschema.SecuritySettings{
 		EnableTpm: false,
 		Isolation: &hcsschema.IsolationSettings{
 			IsolationType: "SecureNestedPaging",
-			LaunchData:    securityPolicyHash,
+			LaunchData:    hostData,
 			// HclEnabled:    true, /* Not available in schema 2.5 - REQUIRED when using BlockStorage in 2.6 */
 		},
 	}
@@ -488,7 +484,7 @@ func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcs
 	}
 
 	var processor *hcsschema.Processor2
-	processor, err = fetchProcessor(ctx, opts, uvm) // must happen after the file existance tests above.
+	processor, err = fetchProcessor(ctx, opts, uvm) // must happen after the file existence tests above.
 	if err != nil {
 		return nil, err
 	}
@@ -537,13 +533,14 @@ func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcs
 	}
 
 	if uvm.scsiControllerCount > 0 {
-		// TODO: JTERRY75 - this should enumerate scsicount and add an entry per value.
-		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{
-			"0": {
+		doc.VirtualMachine.Devices.Scsi = map[string]hcsschema.Scsi{}
+		for i := 0; i < int(uvm.scsiControllerCount); i++ {
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[i]] = hcsschema.Scsi{
 				Attachments: make(map[string]hcsschema.Attachment),
-			},
+			}
 		}
 	}
+
 	if uvm.vpmemMaxCount > 0 {
 		doc.VirtualMachine.Devices.VirtualPMem = &hcsschema.VirtualPMemController{
 			MaximumCount:     uvm.vpmemMaxCount,
@@ -558,48 +555,59 @@ func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcs
 			kernelArgs = "initrd=/" + opts.RootFSFile
 		}
 	case PreferredRootFSTypeVHD:
-		// Support for VPMem VHD(X) booting rather than initrd..
-		kernelArgs = "root=/dev/pmem0 ro rootwait init=/init"
-		imageFormat := "Vhd1"
-		if strings.ToLower(filepath.Ext(opts.RootFSFile)) == "vhdx" {
-			imageFormat = "Vhdx"
-		}
-		doc.VirtualMachine.Devices.VirtualPMem.Devices = map[string]hcsschema.VirtualPMemDevice{
-			"0": {
-				HostPath:    rootfsFullPath,
-				ReadOnly:    true,
-				ImageFormat: imageFormat,
-			},
-		}
-		if uvm.vpmemMultiMapping {
-			pmem := newPackedVPMemDevice()
-			pmem.maxMappedDeviceCount = 1
+		if uvm.vpmemMaxCount > 0 {
+			// Support for VPMem VHD(X) booting rather than initrd..
+			kernelArgs = "root=/dev/pmem0 ro rootwait init=/init"
+			imageFormat := "Vhd1"
+			if strings.ToLower(filepath.Ext(opts.RootFSFile)) == "vhdx" {
+				imageFormat = "Vhdx"
+			}
+			doc.VirtualMachine.Devices.VirtualPMem.Devices = map[string]hcsschema.VirtualPMemDevice{
+				"0": {
+					HostPath:    rootfsFullPath,
+					ReadOnly:    true,
+					ImageFormat: imageFormat,
+				},
+			}
+			if uvm.vpmemMultiMapping {
+				pmem := newPackedVPMemDevice()
+				pmem.maxMappedDeviceCount = 1
 
-			st, err := os.Stat(rootfsFullPath)
-			if err != nil {
-				return nil, errors.Wrapf(err, "failed to stat rootfs: %q", rootfsFullPath)
-			}
-			devSize := pageAlign(uint64(st.Size()))
-			memReg, err := pmem.Allocate(devSize)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to allocate memory for rootfs")
-			}
-			defer func() {
+				st, err := os.Stat(rootfsFullPath)
 				if err != nil {
-					if err = pmem.Release(memReg); err != nil {
-						log.G(ctx).WithError(err).Debug("failed to release memory region")
-					}
+					return nil, errors.Wrapf(err, "failed to stat rootfs: %q", rootfsFullPath)
 				}
-			}()
+				devSize := pageAlign(uint64(st.Size()))
+				memReg, err := pmem.Allocate(devSize)
+				if err != nil {
+					return nil, errors.Wrap(err, "failed to allocate memory for rootfs")
+				}
+				defer func() {
+					if err != nil {
+						if err = pmem.Release(memReg); err != nil {
+							log.G(ctx).WithError(err).Debug("failed to release memory region")
+						}
+					}
+				}()
 
-			dev := newVPMemMappedDevice(opts.RootFSFile, "/", devSize, memReg)
-			if err := pmem.mapVHDLayer(ctx, dev); err != nil {
-				return nil, errors.Wrapf(err, "failed to save internal state for a multi-mapped rootfs device")
+				dev := newVPMemMappedDevice(opts.RootFSFile, "/", devSize, memReg)
+				if err := pmem.mapVHDLayer(ctx, dev); err != nil {
+					return nil, errors.Wrapf(err, "failed to save internal state for a multi-mapped rootfs device")
+				}
+				uvm.vpmemDevicesMultiMapped[0] = pmem
+			} else {
+				dev := newDefaultVPMemInfo(opts.RootFSFile, "/")
+				uvm.vpmemDevicesDefault[0] = dev
 			}
-			uvm.vpmemDevicesMultiMapped[0] = pmem
 		} else {
-			dev := newDefaultVPMemInfo(opts.RootFSFile, "/")
-			uvm.vpmemDevicesDefault[0] = dev
+			kernelArgs = "root=/dev/sda ro rootwait init=/init"
+			doc.VirtualMachine.Devices.Scsi[guestrequest.ScsiControllerGuids[0]].Attachments["0"] = hcsschema.Attachment{
+				Type_:    "VirtualDisk",
+				Path:     rootfsFullPath,
+				ReadOnly: true,
+			}
+			uvm.scsiLocations[0][0] = newSCSIMount(uvm, rootfsFullPath, "/", "VirtualDisk", "", 1, 0, 0, true, false)
+
 		}
 	}
 
@@ -654,11 +662,11 @@ func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcs
 	}
 
 	if opts.DisableTimeSyncService {
-		opts.ExecCommandLine = fmt.Sprintf("%s --disable-time-sync", opts.ExecCommandLine)
+		opts.ExecCommandLine = fmt.Sprintf("%s -disable-time-sync", opts.ExecCommandLine)
 	}
 
 	if log.IsScrubbingEnabled() {
-		opts.ExecCommandLine += " --scrub-logs"
+		opts.ExecCommandLine += " -scrub-logs"
 	}
 
 	execCmdArgs += " " + opts.ExecCommandLine
@@ -701,7 +709,7 @@ func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcs
 // consumes a set of options derived from various defaults and options
 // expressed as annotations.
 func CreateLCOW(ctx context.Context, opts *OptionsLCOW) (_ *UtilityVM, err error) {
-	ctx, span := trace.StartSpan(ctx, "uvm::CreateLCOW")
+	ctx, span := oc.StartSpan(ctx, "uvm::CreateLCOW")
 	defer span.End()
 	defer func() { oc.SetSpanStatus(span, err) }()
 
@@ -742,6 +750,12 @@ func CreateLCOW(ctx context.Context, opts *OptionsLCOW) (_ *UtilityVM, err error
 			uvm.Close()
 		}
 	}()
+
+	// vpmemMaxCount has been set to 0 which means we are going to need multiple SCSI controllers
+	// to support lots of layers.
+	if osversion.Build() >= osversion.RS5 && uvm.vpmemMaxCount == 0 {
+		uvm.scsiControllerCount = 4
+	}
 
 	if err = verifyOptions(ctx, opts); err != nil {
 		return nil, errors.Wrap(err, errBadUVMOpts.Error())

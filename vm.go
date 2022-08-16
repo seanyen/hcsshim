@@ -373,21 +373,31 @@ func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (output 
 	}
 	defer system.Close()
 
-	params := &hcsschema.ProcessParameters{
-		CommandArgs:      command,
-		WorkingDirectory: "/",
-		User:             user,
-		Environment:      map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
-		CreateStdInPipe:  false,
-		CreateStdOutPipe: true,
-		CreateStdErrPipe: true,
-		ConsoleSize:      []int32{0, 0},
-	}
-
-	if system.OS() == "windows" {
-		params.CommandLine = escapeArgs(command)
-		params.WorkingDirectory = `C:\`
-		params.Environment = nil
+	var params *hcsschema.ProcessParameters
+	switch system.OS() {
+	case "linux":
+		params = &hcsschema.ProcessParameters{
+			CommandArgs:      command,
+			WorkingDirectory: "/",
+			User:             user,
+			Environment:      map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
+			CreateStdInPipe:  false,
+			CreateStdOutPipe: true,
+			CreateStdErrPipe: true,
+			ConsoleSize:      []int32{0, 0},
+		}
+	case "windows":
+		params = &hcsschema.ProcessParameters{
+			CommandLine:      escapeArgs(command),
+			WorkingDirectory: `C:\`,
+			User:             user,
+			CreateStdInPipe:  false,
+			CreateStdOutPipe: true,
+			CreateStdErrPipe: true,
+			ConsoleSize:      []int32{0, 0},
+		}
+	default:
+		return "", "", ErrNotSupported
 	}
 
 	process, err := system.CreateProcess(ctx, params)

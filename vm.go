@@ -19,6 +19,7 @@ import (
 	hcsschema "github.com/Microsoft/hcsshim/internal/schema2"
 	"github.com/Microsoft/hcsshim/internal/wclayer"
 	"github.com/Microsoft/hcsshim/osversion"
+	"golang.org/x/sys/windows"
 )
 
 type GpuAssignmentMode string
@@ -353,28 +354,40 @@ func (vm *VirtualMachineSpec) ExecuteCommand(command string) error {
 	return nil
 }
 
+// escapeArgs makes a Windows-style escaped command line from a set of arguments
+func escapeArgs(args []string) string {
+	escapedArgs := make([]string, len(args))
+	for i, a := range args {
+		escapedArgs[i] = windows.EscapeArg(a)
+	}
+	return strings.Join(escapedArgs, " ")
+}
+
 // RunCommand executes a command on the Virtual Machine
-func (vm *VirtualMachineSpec) RunCommand(command []string) (output string, err error) {
+func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (output string, errOut string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
 	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer system.Close()
-
-	if system.OS() != "linux" {
-		return "", ErrNotSupported
-	}
 
 	params := &hcsschema.ProcessParameters{
 		CommandArgs:      command,
 		WorkingDirectory: "/",
+		User:             user,
 		Environment:      map[string]string{"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"},
 		CreateStdInPipe:  false,
 		CreateStdOutPipe: true,
-		CreateStdErrPipe: false,
+		CreateStdErrPipe: true,
 		ConsoleSize:      []int32{0, 0},
+	}
+
+	if system.OS() == "windows" {
+		params.CommandLine = escapeArgs(command)
+		params.WorkingDirectory = `C:\`
+		params.Environment = nil
 	}
 
 	process, err := system.CreateProcess(ctx, params)
@@ -386,17 +399,21 @@ func (vm *VirtualMachineSpec) RunCommand(command []string) (output string, err e
 
 	err = process.Wait()
 	if err != nil {
-		return "Wait returned error!", err
+		return "Wait returned error!", "", err
 	}
 
-	_, reader, _ := process.Stdio()
-	if reader == nil {
-		return "Stdout is nil!", err
+	_, reader, errReader := process.Stdio()
+	if reader != nil {
+		outBuf := new(bytes.Buffer)
+		outBuf.ReadFrom(reader)
+		output = strings.TrimSpace(outBuf.String())
 	}
 
-	outBuf := new(bytes.Buffer)
-	outBuf.ReadFrom(reader)
-	output = strings.TrimSpace(outBuf.String())
+	if errReader != nil {
+		errBuf := new(bytes.Buffer)
+		errBuf.ReadFrom(errReader)
+		errOut = strings.TrimSpace(errBuf.String())
+	}
 
 	return
 }

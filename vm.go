@@ -364,12 +364,15 @@ func escapeArgs(args []string) string {
 }
 
 // RunCommand executes a command on the Virtual Machine
-func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (output string, errOut string, err error) {
+func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (exitCode int, output string, errOut string, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
 	defer cancel()
+
+	exitCode = 1
+
 	system, err := hcs.OpenComputeSystem(ctx, vm.ID)
 	if err != nil {
-		return "", "", err
+		return exitCode, "", "", err
 	}
 	defer system.Close()
 
@@ -397,7 +400,7 @@ func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (output 
 			ConsoleSize:      []int32{0, 0},
 		}
 	default:
-		return "", "", ErrNotSupported
+		return exitCode, "", "", ErrNotSupported
 	}
 
 	process, err := system.CreateProcess(ctx, params)
@@ -409,8 +412,10 @@ func (vm *VirtualMachineSpec) RunCommand(command []string, user string) (output 
 
 	err = process.Wait()
 	if err != nil {
-		return "Wait returned error!", "", err
+		return exitCode, "Wait returned error!", "", err
 	}
+
+	exitCode, err = process.ExitCode()
 
 	_, reader, errReader := process.Stdio()
 	if reader != nil {
